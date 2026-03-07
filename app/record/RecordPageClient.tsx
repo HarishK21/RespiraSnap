@@ -1,11 +1,14 @@
 "use client";
 
+import Waveform, { type WaveformMarker } from "@/components/audio/Waveform";
 import AppShell from "@/components/layout/AppShell";
 import { fadeIn, fadeUp, hoverGlow, staggerChildren } from "@/components/motion/presets";
 import { Divider, GlassCard, GlowButton, HintText, Pill, SectionTitle } from "@/components/ui/primitives";
+import { useBackboardIdentity } from "@/hooks/useBackboardIdentity";
 import { useDemoMode } from "@/hooks/useDemoMode";
 import { useReducedMotionPref } from "@/hooks/useReducedMotionPref";
 import { useSessionVideo } from "@/hooks/useSessionVideo";
+import { extractAudioFeatureTimeline, type AudioFeatureTimeline } from "@/lib/audioFeatures";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
@@ -24,17 +27,73 @@ type RecordPageClientProps = {
 type InputMode = "record" | "upload" | null;
 type PermissionState = "idle" | "granted" | "denied" | "unsupported";
 type RecorderStopReason = "complete" | "cancel";
+type AgentStatus = "queued" | "running" | "done" | "error";
+type AgentKey = "segmentation" | "baselineTrend" | "clinicalSummary" | "coaching" | "followUp";
 
 type BreathingCue = {
   atMs: number;
   text: string;
 };
 
+type AgentState = {
+  key: AgentKey;
+  title: string;
+  modelLabel: "A" | "B" | "C" | "D";
+  status: AgentStatus;
+  summary: string;
+  message?: string;
+};
+
+type AnalyzeEvent =
+  | {
+      type: "init";
+      assistantId: string;
+      threadId: string;
+    }
+  | {
+      type: "agent";
+      key: AgentKey;
+      title: string;
+      modelLabel: "A" | "B" | "C" | "D";
+      status: AgentStatus;
+      message?: string;
+      output?: {
+        model?: string;
+        result?: unknown;
+      };
+    }
+  | {
+      type: "complete";
+      assistantId: string;
+      threadId: string;
+      results: Record<string, unknown>;
+    }
+  | {
+      type: "fatal";
+      message: string;
+    };
+
 const BREATHING_CUES: BreathingCue[] = [
   { atMs: 0, text: "Inhale..." },
   { atMs: 5000, text: "Hold..." },
   { atMs: 8000, text: "Exhale..." }
 ];
+
+const AGENT_BLUEPRINT: Array<Pick<AgentState, "key" | "title" | "modelLabel">> = [
+  { key: "segmentation", title: "Segmentation Agent", modelLabel: "A" },
+  { key: "baselineTrend", title: "Baseline & Trend Agent", modelLabel: "B" },
+  { key: "clinicalSummary", title: "Clinical Summary Agent", modelLabel: "C" },
+  { key: "coaching", title: "Coaching Agent", modelLabel: "D" },
+  { key: "followUp", title: "Follow-up Agent", modelLabel: "D" }
+];
+
+function createInitialAgentState(): AgentState[] {
+  return AGENT_BLUEPRINT.map((agent) => ({
+    ...agent,
+    status: "queued",
+    summary: "Queued"
+  }));
+}
 
 function modeToLabel(mode: string) {
   if (mode === "breathing") return "Breathing Snapshot";
@@ -43,6 +102,13 @@ function modeToLabel(mode: string) {
 
 function formatClock(seconds: number) {
   return `00:${String(Math.max(0, seconds)).padStart(2, "0")}`;
+}
+
+function formatTimeLabel(seconds: number) {
+  const safe = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
 function canRecordInBrowser() {
@@ -71,6 +137,112 @@ function cx(...classNames: Array<string | undefined | null | false>) {
   return classNames.filter(Boolean).join(" ");
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getAudioContextCtor() {
+  if (typeof window === "undefined") return null;
+
+  const webkitAudioContext = (
+    window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }
+  ).webkitAudioContext;
+
+  return window.AudioContext || webkitAudioContext || null;
+}
+
+function downsample(values: number[], targetBins: number) {
+  if (!values.length || targetBins <= 0) return [];
+  if (values.length <= targetBins) return values.map((value) => Number(clamp(value, 0, 1).toFixed(4)));
+
+  const result: number[] = [];
+  const size = values.length / targetBins;
+
+  for (let index = 0; index < targetBins; index += 1) {
+    const start = Math.floor(index * size);
+    const end = Math.min(values.length, Math.floor((index + 1) * size));
+
+    let total = 0;
+    let count = 0;
+
+    for (let sampleIndex = start; sampleIndex < end; sampleIndex += 1) {
+      total += Math.abs(values[sampleIndex] ?? 0);
+      count += 1;
+    }
+
+    result.push(Number((count ? total / count : 0).toFixed(4)));
+  }
+
+  return result;
+}
+
+function computeFeatureStats(energy: number[]) {
+  if (!energy.length) {
+    return {
+      averageEnergy: 0,
+      peakEnergy: 0,
+      energyVariance: 0,
+      rhythmStability: 0
+    };
+  }
+
+  const averageEnergy = energy.reduce((sum, value) => sum + value, 0) / energy.length;
+  const peakEnergy = energy.reduce((peak, value) => Math.max(peak, value), 0);
+
+  const variance =
+    energy.reduce((sum, value) => {
+      const diff = value - averageEnergy;
+      return sum + diff * diff;
+    }, 0) / energy.length;
+
+  const rhythmStability = clamp(1 - variance * 8, 0, 1);
+
+  return {
+    averageEnergy: Number(averageEnergy.toFixed(4)),
+    peakEnergy: Number(peakEnergy.toFixed(4)),
+    energyVariance: Number(variance.toFixed(4)),
+    rhythmStability: Number(rhythmStability.toFixed(4))
+  };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function valueAsString(value: unknown, fallback = "") {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
+
+function summarizeAgentResult(value: unknown) {
+  if (isObject(value)) {
+    if (typeof value.baselineDelta === "string") {
+      return `${value.baselineDelta} (${value.confidence ?? "n/a"})`;
+    }
+
+    if (typeof value.summary === "string") {
+      return value.summary;
+    }
+
+    if (typeof value.microIntervention === "string") {
+      return value.microIntervention;
+    }
+
+    if (typeof value.nextWeekPrompt === "string") {
+      return value.nextWeekPrompt;
+    }
+
+    if (Array.isArray(value.segments)) {
+      return `${value.segments.length} segments detected`;
+    }
+  }
+
+  const raw = JSON.stringify(value);
+  if (!raw) return "Done";
+  return raw.length > 120 ? `${raw.slice(0, 117)}...` : raw;
+}
+
 export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const router = useRouter();
   const modeLabel = modeToLabel(mode);
@@ -78,19 +250,33 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const { reducedMotion, hasOverride, toggleReducedMotion } = useReducedMotionPref();
   const { demoMode, toggleDemoMode } = useDemoMode();
   const { sessionVideo, setSessionVideo, clearSessionVideo } = useSessionVideo();
+  const { deviceId, assistantId, threadId, isReady: identityReady, setBackboardContext } = useBackboardIdentity();
 
   const [inputMode, setInputMode] = useState<InputMode>(sessionVideo?.source ?? null);
   const [isRecording, setIsRecording] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(CAPTURE_SECONDS);
-  const [permissionState, setPermissionState] = useState<PermissionState>(
-    canRecordInBrowser() ? "idle" : "unsupported"
-  );
+  const [permissionState, setPermissionState] = useState<PermissionState>("idle");
   const [voiceCoachEnabled, setVoiceCoachEnabled] = useState(true);
   const [statusMessage, setStatusMessage] = useState("Choose Record or Upload to begin.");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [coachMessage, setCoachMessage] = useState<string | null>(null);
-  const [analyzeMessage, setAnalyzeMessage] = useState<string | null>(null);
+  const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
   const [agentsOpen, setAgentsOpen] = useState(false);
+
+  const [waveformData, setWaveformData] = useState<AudioFeatureTimeline | null>(null);
+  const [waveformLoading, setWaveformLoading] = useState(false);
+  const [waveformError, setWaveformError] = useState<string | null>(null);
+  const [liveWaveform, setLiveWaveform] = useState<{ envelope: number[]; energy: number[] }>({
+    envelope: [],
+    energy: []
+  });
+
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+
+  const [analysisRunning, setAnalysisRunning] = useState(false);
+  const [analysisResults, setAnalysisResults] = useState<Record<string, unknown> | null>(null);
+  const [agentStates, setAgentStates] = useState<AgentState[]>(() => createInitialAgentState());
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -107,8 +293,80 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const cueAudioRef = useRef<HTMLAudioElement | null>(null);
   const cueBlobUrlsRef = useRef<string[]>([]);
 
+  const liveWaveRafRef = useRef<number | null>(null);
+  const liveWaveContextRef = useRef<AudioContext | null>(null);
+  const liveWaveSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const liveWaveAnalyserRef = useRef<AnalyserNode | null>(null);
+  const liveEnvelopeRef = useRef<number[]>([]);
+  const liveEnergyRef = useRef<number[]>([]);
+
   const flowStep = sessionVideo ? 3 : inputMode ? 2 : 1;
   const progressPercent = ((CAPTURE_SECONDS - secondsLeft) / CAPTURE_SECONDS) * 100;
+
+  const playbackCurrentTime = isRecording ? CAPTURE_SECONDS - secondsLeft : videoCurrentTime;
+  const waveformDuration = isRecording
+    ? CAPTURE_SECONDS
+    : Math.max(waveformData?.duration ?? 0, Number.isFinite(videoDuration) ? videoDuration : 0);
+
+  const displayedEnvelope = isRecording ? liveWaveform.envelope : waveformData?.envelope ?? [];
+  const displayedEnergy = isRecording ? liveWaveform.energy : waveformData?.energy ?? [];
+
+  const eventMarkers = useMemo<WaveformMarker[]>(() => {
+    const baseDuration = waveformDuration || CAPTURE_SECONDS;
+    if (baseDuration <= 0) return [];
+
+    return [
+      {
+        id: "marker-inhale",
+        time: clamp(baseDuration * 0.18, 0.5, Math.max(0.5, baseDuration - 0.5)),
+        label: "Inhale"
+      },
+      {
+        id: "marker-hold",
+        time: clamp(baseDuration * 0.48, 0.5, Math.max(0.5, baseDuration - 0.5)),
+        label: "Hold"
+      },
+      {
+        id: "marker-exhale",
+        time: clamp(baseDuration * 0.76, 0.5, Math.max(0.5, baseDuration - 0.5)),
+        label: "Exhale"
+      }
+    ];
+  }, [waveformDuration]);
+
+  const baselineDelta = useMemo(() => {
+    const baseline = isObject(analysisResults?.baselineTrend) ? analysisResults?.baselineTrend : null;
+    return valueAsString(baseline?.baselineDelta, "Baseline: pending");
+  }, [analysisResults]);
+
+  const baselineConfidence = useMemo(() => {
+    const baseline = isObject(analysisResults?.baselineTrend) ? analysisResults?.baselineTrend : null;
+    return valueAsString(baseline?.confidence, "n/a");
+  }, [analysisResults]);
+
+  const clinicalSummary = useMemo(() => {
+    const clinical = isObject(analysisResults?.clinicalSummary) ? analysisResults?.clinicalSummary : null;
+    return valueAsString(clinical?.summary);
+  }, [analysisResults]);
+
+  const coachingTip = useMemo(() => {
+    const coaching = isObject(analysisResults?.coaching) ? analysisResults?.coaching : null;
+    return valueAsString(coaching?.microIntervention);
+  }, [analysisResults]);
+
+  const followUpPrompt = useMemo(() => {
+    const followUp = isObject(analysisResults?.followUp) ? analysisResults?.followUp : null;
+    return valueAsString(followUp?.nextWeekPrompt);
+  }, [analysisResults]);
+
+  const agentProgress = useMemo(() => {
+    const total = agentStates.length;
+    const done = agentStates.filter((agent) => agent.status === "done").length;
+    const running = agentStates.filter((agent) => agent.status === "running").length;
+    const errors = agentStates.filter((agent) => agent.status === "error").length;
+
+    return { total, done, running, errors };
+  }, [agentStates]);
 
   const stepTransition: Variants = useMemo(() => {
     if (reducedMotion) {
@@ -140,6 +398,33 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     };
   }, [reducedMotion]);
 
+  const updateAgentState = useCallback(
+    (
+      key: AgentKey,
+      patch: Partial<Omit<AgentState, "key" | "title" | "modelLabel">> & { status: AgentStatus }
+    ) => {
+      setAgentStates((previous) =>
+        previous.map((agent) => {
+          if (agent.key !== key) return agent;
+          return {
+            ...agent,
+            ...patch,
+            summary:
+              patch.summary ??
+              (patch.status === "queued"
+                ? "Queued"
+                : patch.status === "running"
+                  ? "Running"
+                  : patch.status === "error"
+                    ? "Error"
+                    : agent.summary)
+          };
+        })
+      );
+    },
+    []
+  );
+
   const stopMediaTracks = useCallback(() => {
     const stream = mediaStreamRef.current;
     if (!stream) return;
@@ -147,6 +432,100 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     stream.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
   }, []);
+
+  const stopLiveWaveform = useCallback(() => {
+    if (liveWaveRafRef.current) {
+      cancelAnimationFrame(liveWaveRafRef.current);
+      liveWaveRafRef.current = null;
+    }
+
+    if (liveWaveSourceRef.current) {
+      liveWaveSourceRef.current.disconnect();
+      liveWaveSourceRef.current = null;
+    }
+
+    if (liveWaveAnalyserRef.current) {
+      liveWaveAnalyserRef.current.disconnect();
+      liveWaveAnalyserRef.current = null;
+    }
+
+    if (liveWaveContextRef.current) {
+      void liveWaveContextRef.current.close();
+      liveWaveContextRef.current = null;
+    }
+  }, []);
+
+  const startLiveWaveform = useCallback(
+    (stream: MediaStream) => {
+      const AudioContextCtor = getAudioContextCtor();
+      if (!AudioContextCtor) return;
+
+      stopLiveWaveform();
+
+      const context = new AudioContextCtor();
+      const source = context.createMediaStreamSource(stream);
+      const analyser = context.createAnalyser();
+
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.82;
+
+      source.connect(analyser);
+
+      liveWaveContextRef.current = context;
+      liveWaveSourceRef.current = source;
+      liveWaveAnalyserRef.current = analyser;
+      liveEnvelopeRef.current = [];
+      liveEnergyRef.current = [];
+      setLiveWaveform({ envelope: [], energy: [] });
+
+      const sampleArray = new Uint8Array(analyser.fftSize);
+      let lastCommit = 0;
+
+      const tick = (timestamp: number) => {
+        if (!liveWaveAnalyserRef.current) return;
+
+        liveWaveAnalyserRef.current.getByteTimeDomainData(sampleArray);
+
+        let sumAbs = 0;
+        let sumSquares = 0;
+        for (let i = 0; i < sampleArray.length; i += 1) {
+          const normalized = (sampleArray[i] - 128) / 128;
+          sumAbs += Math.abs(normalized);
+          sumSquares += normalized * normalized;
+        }
+
+        const meanAbs = sumAbs / sampleArray.length;
+        const rms = Math.sqrt(sumSquares / sampleArray.length);
+
+        liveEnvelopeRef.current.push(meanAbs);
+        liveEnergyRef.current.push(rms);
+
+        if (liveEnvelopeRef.current.length > 280) {
+          liveEnvelopeRef.current.shift();
+        }
+        if (liveEnergyRef.current.length > 280) {
+          liveEnergyRef.current.shift();
+        }
+
+        if (timestamp - lastCommit > 70) {
+          const envelopePeak = Math.max(...liveEnvelopeRef.current, 0.0001);
+          const energyPeak = Math.max(...liveEnergyRef.current, 0.0001);
+
+          setLiveWaveform({
+            envelope: liveEnvelopeRef.current.map((value) => value / envelopePeak),
+            energy: liveEnergyRef.current.map((value) => value / energyPeak)
+          });
+
+          lastCommit = timestamp;
+        }
+
+        liveWaveRafRef.current = requestAnimationFrame(tick);
+      };
+
+      liveWaveRafRef.current = requestAnimationFrame(tick);
+    },
+    [stopLiveWaveform]
+  );
 
   const clearRecordingTimers = useCallback(() => {
     if (countdownIntervalRef.current) {
@@ -193,7 +572,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
           const payload = (await response.json()) as { error?: string };
           if (payload.error) detail = payload.error;
         } catch {
-          // Keep fallback message.
+          // Keep fallback.
         }
 
         setCoachMessage(detail);
@@ -212,7 +591,6 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       const audio = new Audio(audioUrl);
       audio.volume = 0.92;
       cueAudioRef.current = audio;
-
       await audio.play();
     } catch {
       setCoachMessage("Voice coach failed to play; recording continues silently.");
@@ -225,19 +603,18 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     stopVoiceCoach();
     setCoachMessage(null);
 
-    const scheduled = BREATHING_CUES.map((cue) =>
+    cueTimeoutsRef.current = BREATHING_CUES.map((cue) =>
       setTimeout(() => {
         void playVoiceCue(cue.text);
       }, cue.atMs)
     );
-
-    cueTimeoutsRef.current = scheduled;
   }, [playVoiceCue, stopVoiceCoach, voiceCoachEnabled]);
 
   const finalizeRecording = useCallback(
     (reason: RecorderStopReason, recorderMimeType?: string) => {
       clearRecordingTimers();
       stopVoiceCoach();
+      stopLiveWaveform();
       stopMediaTracks();
 
       setIsRecording(false);
@@ -269,11 +646,11 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
         createdAt: Date.now()
       });
 
-      setStatusMessage("15 second recording ready for analysis.");
-      setAnalyzeMessage(null);
+      setStatusMessage("15 second recording ready for Backboard analysis.");
+      setAnalysisMessage(null);
       setErrorMessage(null);
     },
-    [clearRecordingTimers, setSessionVideo, stopMediaTracks, stopVoiceCoach]
+    [clearRecordingTimers, setSessionVideo, stopLiveWaveform, stopMediaTracks, stopVoiceCoach]
   );
 
   const stopRecording = useCallback(
@@ -287,6 +664,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       recordingStopReasonRef.current = reason;
       clearRecordingTimers();
       stopVoiceCoach();
+      stopLiveWaveform();
 
       if (recorder.state !== "inactive") {
         recorder.stop();
@@ -294,7 +672,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
         finalizeRecording(reason, recorder.mimeType);
       }
     },
-    [clearRecordingTimers, finalizeRecording, stopVoiceCoach]
+    [clearRecordingTimers, finalizeRecording, stopLiveWaveform, stopVoiceCoach]
   );
 
   const startRecording = useCallback(async () => {
@@ -306,8 +684,12 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
     setInputMode("record");
     setErrorMessage(null);
-    setAnalyzeMessage(null);
+    setAnalysisMessage(null);
     setCoachMessage(null);
+    setWaveformError(null);
+    setWaveformData(null);
+    setVideoCurrentTime(0);
+    setVideoDuration(0);
     setStatusMessage("Requesting camera and microphone access...");
 
     try {
@@ -344,6 +726,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
       recorder.start(250);
       clearSessionVideo();
+      startLiveWaveform(stream);
 
       setPermissionState("granted");
       setIsRecording(true);
@@ -367,7 +750,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       );
       stopMediaTracks();
     }
-  }, [clearSessionVideo, finalizeRecording, stopMediaTracks, stopRecording]);
+  }, [clearSessionVideo, finalizeRecording, startLiveWaveform, stopMediaTracks, stopRecording]);
 
   const chooseRecord = useCallback(() => {
     setInputMode("record");
@@ -403,32 +786,224 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
         createdAt: Date.now()
       });
 
+      setWaveformData(null);
+      setWaveformError(null);
+      setVideoCurrentTime(0);
+      setVideoDuration(0);
       setInputMode("upload");
-      setStatusMessage("Uploaded video ready for analysis.");
-      setAnalyzeMessage(null);
+      setStatusMessage("Uploaded video ready for Backboard analysis.");
+      setAnalysisMessage(null);
       setErrorMessage(null);
     },
     [setSessionVideo]
   );
 
-  const handleAnalyze = useCallback(() => {
-    if (!sessionVideo) return;
+  const seekVideo = useCallback(
+    (nextTime: number, context: "scrub" | "marker", markerLabel?: string) => {
+      const video = videoRef.current;
 
-    setAnalyzeMessage("Analysis handoff placeholder triggered. Judges: connect this to your agents pipeline.");
-    setStatusMessage("Ready for next stage.");
+      if (!sessionVideo || !video || isRecording) {
+        if (context === "marker" && markerLabel) {
+          setStatusMessage(`Marker selected: ${markerLabel} (${formatTimeLabel(nextTime)}).`);
+        }
+        return;
+      }
+
+      const maxDuration = videoDuration > 0 ? videoDuration : waveformDuration;
+      const clamped = clamp(nextTime, 0, Math.max(0, maxDuration));
+
+      video.currentTime = clamped;
+      setVideoCurrentTime(clamped);
+
+      if (context === "scrub") {
+        setStatusMessage(`Scrubbed to ${formatTimeLabel(clamped)}.`);
+      } else if (markerLabel) {
+        setStatusMessage(`Marker: ${markerLabel} at ${formatTimeLabel(clamped)}.`);
+      }
+    },
+    [isRecording, sessionVideo, videoDuration, waveformDuration]
+  );
+
+  const handleAnalyze = useCallback(async () => {
+    if (!sessionVideo || isRecording || analysisRunning || !identityReady) return;
+
+    const envelopeForPipeline = downsample(waveformData?.envelope ?? displayedEnvelope, 96);
+    const energyForPipeline = downsample(waveformData?.energy ?? displayedEnergy, 96);
+    const featureStats = computeFeatureStats(energyForPipeline);
+
     setAgentsOpen(true);
-  }, [sessionVideo]);
+    setAnalysisRunning(true);
+    setAnalysisResults(null);
+    setAnalysisMessage("Backboard multi-agent pipeline running...");
+    setErrorMessage(null);
+    setAgentStates(createInitialAgentState());
+
+    try {
+      const response = await fetch("/api/backboard/analyze", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          deviceId,
+          assistantId,
+          threadId,
+          mode,
+          session: {
+            source: sessionVideo.source,
+            duration: waveformDuration || CAPTURE_SECONDS,
+            capturedAt: new Date().toISOString()
+          },
+          preferences: {
+            voiceCoachEnabled,
+            reducedMotion,
+            typicalCaptureTime: new Date().toLocaleTimeString("en-CA", {
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false
+            })
+          },
+          features: {
+            envelope: envelopeForPipeline,
+            energy: energyForPipeline,
+            stats: featureStats,
+            markers: eventMarkers.map((marker) => ({
+              time: marker.time,
+              label: marker.label
+            }))
+          }
+        })
+      });
+
+      if (!response.ok || !response.body) {
+        let detail = "Backboard request failed.";
+        try {
+          const payload = (await response.json()) as { error?: string };
+          if (payload.error) detail = payload.error;
+        } catch {
+          // Keep fallback detail.
+        }
+        throw new Error(detail);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const processEvent = (event: AnalyzeEvent) => {
+        if (event.type === "init") {
+          setBackboardContext({ assistantId: event.assistantId, threadId: event.threadId });
+          return;
+        }
+
+        if (event.type === "agent") {
+          updateAgentState(event.key, {
+            status: event.status,
+            message: event.message,
+            summary:
+              event.status === "done"
+                ? summarizeAgentResult(event.output?.result)
+                : event.status === "running"
+                  ? "Running"
+                  : event.status === "error"
+                    ? "Error"
+                    : "Queued"
+          });
+          return;
+        }
+
+        if (event.type === "complete") {
+          setBackboardContext({ assistantId: event.assistantId, threadId: event.threadId });
+          setAnalysisResults(event.results);
+          setAnalysisMessage("Backboard pipeline complete.");
+          setStatusMessage("Analysis complete. Review agent outputs.");
+          return;
+        }
+
+        if (event.type === "fatal") {
+          setErrorMessage(event.message);
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary >= 0) {
+          const chunk = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+
+          const dataLine = chunk
+            .split("\n")
+            .map((line) => line.trim())
+            .find((line) => line.startsWith("data:"));
+
+          if (dataLine) {
+            const raw = dataLine.slice(5).trim();
+            if (raw) {
+              try {
+                processEvent(JSON.parse(raw) as AnalyzeEvent);
+              } catch {
+                // Ignore malformed stream chunk.
+              }
+            }
+          }
+
+          boundary = buffer.indexOf("\n\n");
+        }
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Backboard analysis failed.");
+      setAnalysisMessage(null);
+    } finally {
+      setAnalysisRunning(false);
+    }
+  }, [
+    analysisRunning,
+    assistantId,
+    deviceId,
+    displayedEnergy,
+    displayedEnvelope,
+    eventMarkers,
+    identityReady,
+    isRecording,
+    mode,
+    reducedMotion,
+    sessionVideo,
+    setBackboardContext,
+    threadId,
+    updateAgentState,
+    voiceCoachEnabled,
+    waveformData?.energy,
+    waveformData?.envelope,
+    waveformDuration
+  ]);
 
   const handleReset = useCallback(() => {
     clearSessionVideo();
+    stopRecording("cancel");
+    stopVoiceCoach();
+    stopLiveWaveform();
     setInputMode(null);
     setIsRecording(false);
     setSecondsLeft(CAPTURE_SECONDS);
-    setAnalyzeMessage(null);
+    setAnalysisMessage(null);
+    setAnalysisResults(null);
+    setAnalysisRunning(false);
+    setAgentStates(createInitialAgentState());
     setCoachMessage(null);
     setErrorMessage(null);
+    setWaveformData(null);
+    setWaveformError(null);
+    setWaveformLoading(false);
+    setLiveWaveform({ envelope: [], energy: [] });
+    setVideoCurrentTime(0);
+    setVideoDuration(0);
     setStatusMessage("Choose Record or Upload to begin.");
-  }, [clearSessionVideo]);
+  }, [clearSessionVideo, stopLiveWaveform, stopRecording, stopVoiceCoach]);
 
   useEffect(() => {
     if (!isRecording) return;
@@ -471,6 +1046,64 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   }, [isRecording, sessionVideo?.url]);
 
   useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const updateTime = () => {
+      setVideoCurrentTime(Number.isFinite(video.currentTime) ? video.currentTime : 0);
+    };
+
+    const updateMeta = () => {
+      const nextDuration = Number.isFinite(video.duration) ? video.duration : 0;
+      setVideoDuration(nextDuration);
+    };
+
+    video.addEventListener("timeupdate", updateTime);
+    video.addEventListener("loadedmetadata", updateMeta);
+    video.addEventListener("durationchange", updateMeta);
+    video.addEventListener("seeking", updateTime);
+
+    return () => {
+      video.removeEventListener("timeupdate", updateTime);
+      video.removeEventListener("loadedmetadata", updateMeta);
+      video.removeEventListener("durationchange", updateMeta);
+      video.removeEventListener("seeking", updateTime);
+    };
+  }, [sessionVideo?.url, isRecording]);
+
+  useEffect(() => {
+    if (!sessionVideo || isRecording) return;
+
+    let cancelled = false;
+
+    setWaveformLoading(true);
+    setWaveformError(null);
+
+    extractAudioFeatureTimeline(sessionVideo.blob)
+      .then((result) => {
+        if (cancelled) return;
+        setWaveformData(result);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWaveformData(null);
+        setWaveformError("Unable to decode audio from this video. Waveform unavailable.");
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setWaveformLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isRecording, sessionVideo?.createdAt, sessionVideo?.blob]);
+
+  useEffect(() => {
+    setPermissionState(canRecordInBrowser() ? "idle" : "unsupported");
+  }, []);
+
+  useEffect(() => {
     if (!sessionVideo?.source || isRecording) return;
     setInputMode(sessionVideo.source);
   }, [isRecording, sessionVideo?.source]);
@@ -479,9 +1112,10 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     return () => {
       clearRecordingTimers();
       stopVoiceCoach();
+      stopLiveWaveform();
       stopMediaTracks();
     };
-  }, [clearRecordingTimers, stopMediaTracks, stopVoiceCoach]);
+  }, [clearRecordingTimers, stopLiveWaveform, stopMediaTracks, stopVoiceCoach]);
 
   const permissionLabel = useMemo(() => {
     if (permissionState === "granted") return "Permissions: Granted";
@@ -531,19 +1165,48 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
               <ol className={styles.instructionList}>
                 <li>Choose input: Record or Upload</li>
                 <li>Preview your 15s breathing clip</li>
-                <li>Run Analyze to continue</li>
+                <li>Run Analyze to start Backboard agents</li>
               </ol>
 
               <div className={styles.chipRow}>
                 <Pill className={styles.statusChip}>{permissionLabel}</Pill>
                 <Pill className={styles.statusChip}>{sourceLabel}</Pill>
                 <Pill className={styles.statusChip}>Voice Coach: {voiceCoachEnabled ? "On" : "Off"}</Pill>
+                <Pill className={styles.statusChip}>Backboard: {analysisRunning ? "Running" : "Ready"}</Pill>
+                <Pill className={styles.statusChip}>Device: {deviceId ? `${deviceId.slice(0, 8)}...` : "Loading"}</Pill>
               </div>
 
               <HintText className={styles.statusText}>{statusMessage}</HintText>
               {errorMessage ? <p className={styles.errorText}>{errorMessage}</p> : null}
               {coachMessage ? <p className={styles.warningText}>{coachMessage}</p> : null}
-              {analyzeMessage ? <p className={styles.successText}>{analyzeMessage}</p> : null}
+              {analysisMessage ? <p className={styles.successText}>{analysisMessage}</p> : null}
+
+              {analysisResults ? (
+                <div className={styles.backboardSummary}>
+                  <p className={styles.summaryLabel}>Backboard Output</p>
+                  <p className={styles.summaryLine}>
+                    Baseline: <span>{baselineDelta}</span>
+                  </p>
+                  <p className={styles.summaryLine}>
+                    Confidence: <span>{baselineConfidence}</span>
+                  </p>
+                  {clinicalSummary ? (
+                    <p className={styles.summaryBody}>
+                      <strong>Clinical:</strong> {clinicalSummary}
+                    </p>
+                  ) : null}
+                  {coachingTip ? (
+                    <p className={styles.summaryBody}>
+                      <strong>Coach:</strong> {coachingTip}
+                    </p>
+                  ) : null}
+                  {followUpPrompt ? (
+                    <p className={styles.summaryBody}>
+                      <strong>Follow-up:</strong> {followUpPrompt}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </GlassCard>
           </motion.aside>
 
@@ -605,12 +1268,27 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                       </div>
                     </div>
 
+                    <Waveform
+                      className={styles.waveformWrap}
+                      envelope={displayedEnvelope}
+                      energy={displayedEnergy}
+                      duration={waveformDuration}
+                      currentTime={playbackCurrentTime}
+                      live={isRecording}
+                      loading={!isRecording && waveformLoading}
+                      error={!isRecording ? waveformError : null}
+                      interactive={!isRecording && !!sessionVideo}
+                      markers={eventMarkers}
+                      onScrub={(nextTime) => seekVideo(nextTime, "scrub")}
+                      onMarkerClick={(marker) => seekVideo(marker.time, "marker", marker.label)}
+                    />
+
                     <HintText className={styles.previewHint}>
                       {isRecording
-                        ? "Capture runs for exactly 15 seconds."
+                        ? "Live waveform uses mic input."
                         : flowStep === 3
-                          ? "Preview ready. Press Analyze to continue."
-                          : "Preview your clip before analysis."}
+                          ? "Waveform synced to timeline. Analyze runs Backboard multi-agent pipeline."
+                          : "Preview waveform before analysis."}
                     </HintText>
                   </motion.div>
                 )}
@@ -626,7 +1304,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                 onClick={() => setAgentsOpen((open) => !open)}
                 aria-expanded={agentsOpen}
               >
-                Agents
+                Agents {agentProgress.done}/{agentProgress.total}
               </button>
 
               <AnimatePresence>
@@ -640,11 +1318,45 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                   >
                     <GlassCard className={styles.agentsPanel}>
                       <SectionTitle as="h3" className={styles.agentsTitle}>
-                        Agents Drawer
+                        Backboard Multi-Agent Pipeline
                       </SectionTitle>
                       <HintText className={styles.agentsCopy}>
-                        Placeholder for judge demos. Connect Analyze to your multi-agent workflow here.
+                        Live orchestration: queued - running - done. Models labeled A/B/C/D.
                       </HintText>
+
+                      <div className={styles.agentRows}>
+                        {agentStates.map((agent) => (
+                          <button
+                            key={agent.key}
+                            type="button"
+                            className={cx(
+                              styles.agentRow,
+                              agent.status === "running" && styles.agentRowRunning,
+                              agent.status === "done" && styles.agentRowDone,
+                              agent.status === "error" && styles.agentRowError
+                            )}
+                            onClick={() => {
+                              if (agent.key === "segmentation") {
+                                const firstMarker = eventMarkers[0];
+                                if (firstMarker) seekVideo(firstMarker.time, "marker", `${agent.title} marker`);
+                              }
+                            }}
+                          >
+                            <span className={styles.agentTop}>
+                              <span className={styles.agentTitle}>{agent.title}</span>
+                              <span className={styles.agentModel}>Model {agent.modelLabel}</span>
+                            </span>
+                            <span className={styles.agentStatus}>{agent.status}</span>
+                            <span className={styles.agentSummary}>{agent.message || agent.summary}</span>
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className={styles.agentMetaRow}>
+                        <Pill className={styles.statusChip}>Running: {agentProgress.running}</Pill>
+                        <Pill className={styles.statusChip}>Errors: {agentProgress.errors}</Pill>
+                        <Pill className={styles.statusChip}>Thread: {threadId ? "linked" : "new"}</Pill>
+                      </div>
                     </GlassCard>
                   </motion.div>
                 ) : null}
@@ -709,14 +1421,19 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
               type="button"
               className={styles.controlButton}
               onClick={handleAnalyze}
-              disabled={!sessionVideo || isRecording || demoMode}
+              disabled={!sessionVideo || isRecording || demoMode || analysisRunning || !identityReady}
             >
-              Analyze
+              {analysisRunning ? "Analyzing..." : "Analyze"}
             </GlowButton>
           </motion.div>
 
           <motion.div variants={fadeUp}>
-            <button type="button" className={styles.ghostButton} onClick={handleReset} disabled={isRecording}>
+            <button
+              type="button"
+              className={styles.ghostButton}
+              onClick={handleReset}
+              disabled={isRecording || analysisRunning}
+            >
               Reset
             </button>
           </motion.div>
