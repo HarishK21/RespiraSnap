@@ -17,6 +17,7 @@ type WaveformMarker = {
 type WaveformProps = {
   envelope: number[];
   energy: number[];
+  baselineEnvelope?: number[] | null;
   duration: number;
   currentTime: number;
   markers?: WaveformMarker[];
@@ -80,6 +81,7 @@ export type { WaveformMarker };
 export default function Waveform({
   envelope,
   energy,
+  baselineEnvelope,
   duration,
   currentTime,
   markers = [],
@@ -99,6 +101,10 @@ export default function Waveform({
   const hasData = envelope.length > 1;
 
   const wavePath = useMemo(() => buildWaveAreaPath(envelope), [envelope]);
+  const baselinePath = useMemo(
+    () => (baselineEnvelope?.length ? buildWaveAreaPath(baselineEnvelope) : ""),
+    [baselineEnvelope]
+  );
   const energyPath = useMemo(() => buildEnergyLinePath(energy), [energy]);
 
   const progressRatio = safeDuration > 0 ? clamp(currentTime / safeDuration, 0, 1) : 0;
@@ -152,6 +158,7 @@ export default function Waveform({
 
         <svg className={styles.svg} viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`} preserveAspectRatio="none" aria-hidden>
           <line className={styles.midLine} x1="0" y1={MID_Y} x2={SVG_WIDTH} y2={MID_Y} />
+          {baselinePath ? <path className={styles.baselineArea} d={baselinePath} /> : null}
           {hasData ? <path className={styles.waveArea} d={wavePath} /> : null}
           {energyPath ? <path className={styles.energyLine} d={energyPath} /> : null}
           {safeDuration > 0 ? <line className={styles.progressLine} x1={progressX} y1="0" x2={progressX} y2={SVG_HEIGHT} /> : null}

@@ -88,6 +88,22 @@ function confidenceFromSamples(sampleCount: number): "low" | "med" | "high" {
   return "low";
 }
 
+function computeSnapshotScore(
+  stats: {
+    averageEnergy?: number;
+    rhythmStability?: number;
+  },
+  segmentation: unknown
+) {
+  const averageEnergy = clamp(safeNumber(stats.averageEnergy, 0), 0, 1);
+  const rhythmStability = clamp(safeNumber(stats.rhythmStability, 0), 0, 1);
+  const irregularCount = isObject(segmentation) && Array.isArray(segmentation.irregularWindows)
+    ? segmentation.irregularWindows.length
+    : 0;
+
+  return clamp(Math.round(60 + rhythmStability * 24 + averageEnergy * 14 - irregularCount * 6), 0, 100);
+}
+
 function parseJsonFromText(content: string) {
   const trimmed = content.trim();
   if (!trimmed) return null;
@@ -562,6 +578,38 @@ export async function POST(request: Request) {
             metadata: {
               category: "preferred-settings",
               deviceId
+            }
+          });
+
+          const baselineResult = isObject(results.baselineTrend) ? results.baselineTrend : {};
+          const clinicalResult = isObject(results.clinicalSummary) ? results.clinicalSummary : {};
+          const coachingResult = isObject(results.coaching) ? results.coaching : {};
+          const followUpResult = isObject(results.followUp) ? results.followUp : {};
+          const segmentationResult = isObject(results.segmentation) ? results.segmentation : {};
+          const snapshotScore = computeSnapshotScore(features.stats, segmentationResult);
+
+          await client.addMemory(assistantId, {
+            content: JSON.stringify({
+              category: "snapshot-summary",
+              deviceId,
+              mode,
+              source: session.source,
+              capturedAt: session.capturedAt,
+              duration: session.duration,
+              score: snapshotScore,
+              baselineDelta: safeString(baselineResult.baselineDelta, "Baseline pending"),
+              confidence: safeString(baselineResult.confidence, confidenceFromSamples(samplesForDevice)),
+              clinicianSummary: safeString(clinicalResult.summary),
+              coachingTip: safeString(coachingResult.microIntervention),
+              followUpPrompt: safeString(followUpResult.nextWeekPrompt),
+              featureStats: features.stats,
+              envelope: features.envelope.slice(0, 64)
+            }),
+            metadata: {
+              category: "snapshot-summary",
+              deviceId,
+              capturedAt: session.capturedAt,
+              mode
             }
           });
 

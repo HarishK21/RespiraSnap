@@ -41,6 +41,12 @@
   stroke-width: 1.2;
 }
 
+.baselineArea {
+  fill: rgba(122, 157, 244, 0.08);
+  stroke: rgba(142, 174, 247, 0.38);
+  stroke-width: 1.1;
+}
+
 .energyLine {
   fill: none;
   stroke: rgba(122, 141, 236, 0.86);

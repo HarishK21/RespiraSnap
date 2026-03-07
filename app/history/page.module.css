@@ -1,0 +1,393 @@
+.main {
+  min-height: 100vh;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.layout {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.headerCard {
+  padding: 0.95rem;
+  display: grid;
+  gap: 0.58rem;
+}
+
+.headerTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: clamp(1.25rem, 2.2vw, 1.8rem);
+}
+
+.filterRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}
+
+.filterButton {
+  border-radius: 999px;
+  border: 1px solid rgba(128, 201, 236, 0.32);
+  background: rgba(7, 21, 39, 0.62);
+  color: rgba(190, 224, 244, 0.85);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.52rem 0.84rem;
+  cursor: pointer;
+}
+
+.filterButtonActive {
+  border-color: rgba(158, 228, 255, 0.64);
+  color: rgba(230, 248, 255, 0.96);
+  background: rgba(19, 70, 97, 0.6);
+}
+
+.metaRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}
+
+.metaPill {
+  font-size: 0.69rem;
+}
+
+.timelineWrap {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.timelineItem {
+  border: 1px solid rgba(129, 203, 239, 0.28);
+  border-radius: 0.94rem;
+  background:
+    radial-gradient(130% 120% at 10% 6%, rgba(69, 141, 191, 0.13), transparent 60%),
+    rgba(6, 19, 35, 0.75);
+  color: rgba(222, 243, 255, 0.96);
+  text-align: left;
+  width: 100%;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.72rem 0.82rem;
+  cursor: pointer;
+  transition: border-color 180ms ease, transform 180ms ease;
+}
+
+.timelineItem:hover {
+  border-color: rgba(158, 231, 255, 0.64);
+  transform: translateY(-1px);
+}
+
+.itemTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.itemDate {
+  color: rgba(201, 228, 242, 0.84);
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.itemBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.scorePill,
+.confidencePill {
+  font-size: 0.68rem;
+}
+
+.confidence-low {
+  border-color: rgba(235, 183, 133, 0.44);
+  color: rgba(250, 221, 194, 0.95);
+}
+
+.confidence-med {
+  border-color: rgba(137, 211, 249, 0.52);
+  color: rgba(210, 238, 255, 0.95);
+}
+
+.confidence-high {
+  border-color: rgba(134, 234, 191, 0.5);
+  color: rgba(212, 250, 230, 0.96);
+}
+
+.itemBody {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.itemSummary {
+  color: rgba(207, 233, 247, 0.86);
+  font-size: 0.84rem;
+  line-height: 1.38;
+  flex: 1;
+}
+
+.sparkWrap {
+  width: 96px;
+  height: 30px;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(126, 197, 232, 0.25);
+  background: rgba(4, 13, 24, 0.58);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.sparkline {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sparklinePath {
+  fill: none;
+  stroke: rgba(133, 224, 255, 0.95);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 7px rgba(101, 208, 255, 0.4));
+}
+
+.itemFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  color: rgba(172, 209, 230, 0.72);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.footerActions {
+  display: flex;
+  justify-content: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.4rem;
+}
+
+.secondaryButton,
+.ghostButton {
+  border-radius: 999px;
+  padding: 0.72rem 1.02rem;
+  font-size: 0.76rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 180ms ease, opacity 180ms ease, background-color 180ms ease;
+}
+
+.secondaryButton {
+  border: 1px solid rgba(147, 219, 251, 0.35);
+  background: rgba(8, 22, 40, 0.72);
+  color: rgba(219, 243, 255, 0.95);
+}
+
+.secondaryButton:hover:not(:disabled) {
+  border-color: rgba(171, 234, 255, 0.58);
+}
+
+.ghostButton {
+  border: 1px solid rgba(129, 196, 228, 0.26);
+  background: transparent;
+  color: rgba(183, 221, 241, 0.84);
+}
+
+.ghostButton:hover:not(:disabled) {
+  background: rgba(8, 25, 44, 0.48);
+}
+
+.emptyCard {
+  padding: 1rem;
+  display: grid;
+  gap: 0.62rem;
+}
+
+.emptyTitle {
+  font-size: clamp(1.2rem, 2.2vw, 1.6rem);
+}
+
+.emptyHint {
+  margin: 0;
+  color: rgba(190, 221, 239, 0.8);
+}
+
+.emptyActions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(2, 10, 20, 0.76);
+  backdrop-filter: blur(4px);
+  padding: 1rem;
+  display: grid;
+  place-items: center;
+}
+
+.modal {
+  width: min(980px, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  border-radius: 1rem;
+  border: 1px solid rgba(130, 205, 242, 0.3);
+  background:
+    radial-gradient(120% 120% at 50% 8%, rgba(62, 136, 184, 0.17), transparent 58%),
+    linear-gradient(170deg, rgba(5, 17, 31, 0.95), rgba(4, 13, 24, 0.96));
+  box-shadow:
+    0 20px 60px rgba(1, 6, 12, 0.65),
+    0 0 48px rgba(90, 192, 239, 0.2);
+  padding: 0.9rem;
+  display: grid;
+  gap: 0.62rem;
+}
+
+.modalTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.modalTitle {
+  font-size: clamp(1.02rem, 1.7vw, 1.3rem);
+}
+
+.modalClose {
+  border-radius: 999px;
+  border: 1px solid rgba(124, 194, 227, 0.3);
+  background: rgba(7, 21, 39, 0.6);
+  color: rgba(188, 222, 242, 0.88);
+  font-size: 0.7rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 0.5rem 0.72rem;
+  cursor: pointer;
+}
+
+.modalVideoWrap {
+  position: relative;
+  min-height: clamp(190px, 34vh, 280px);
+  border-radius: 0.9rem;
+  overflow: hidden;
+  border: 1px solid rgba(131, 208, 246, 0.3);
+  background: rgba(3, 11, 20, 0.9);
+}
+
+.modalVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.modalFallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 1rem;
+  color: rgba(191, 223, 240, 0.82);
+}
+
+.modalFallback p {
+  margin: 0;
+  max-width: 34ch;
+  font-size: 0.84rem;
+}
+
+.modalWaveform {
+  margin-top: 0.1rem;
+}
+
+.markerText {
+  margin: 0;
+  color: rgba(180, 216, 235, 0.82);
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.summaryCard {
+  border-radius: 0.82rem;
+  border: 1px solid rgba(131, 206, 242, 0.25);
+  background: rgba(4, 14, 26, 0.7);
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.summaryLabel {
+  margin: 0;
+  color: rgba(209, 238, 252, 0.9);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.summaryText {
+  margin: 0;
+  color: rgba(203, 230, 245, 0.88);
+  font-size: 0.84rem;
+  line-height: 1.44;
+}
+
+.summaryActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.errorText {
+  margin: 0;
+  color: rgba(252, 203, 203, 0.92);
+  font-size: 0.76rem;
+}
+
+@media (max-width: 760px) {
+  .itemBody {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .sparkWrap {
+    width: 100%;
+  }
+
+  .emptyActions,
+  .footerActions {
+    justify-content: stretch;
+  }
+
+  .emptyActions > *,
+  .footerActions > * {
+    flex: 1 1 100%;
+  }
+}
+

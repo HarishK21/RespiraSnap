@@ -6,9 +6,13 @@ import { fadeIn, fadeUp, hoverGlow, staggerChildren } from "@/components/motion/
 import { Divider, GlassCard, GlowButton, HintText, Pill, SectionTitle } from "@/components/ui/primitives";
 import { useBackboardIdentity } from "@/hooks/useBackboardIdentity";
 import { useDemoMode } from "@/hooks/useDemoMode";
+import { useDemoScript } from "@/hooks/useDemoScript";
 import { useReducedMotionPref } from "@/hooks/useReducedMotionPref";
+import { useSessionAnalysis } from "@/hooks/useSessionAnalysis";
 import { useSessionVideo } from "@/hooks/useSessionVideo";
+import { appendAnalysisHistory, buildSessionAnalysisBundle } from "@/lib/analysisBundle";
 import { extractAudioFeatureTimeline, type AudioFeatureTimeline } from "@/lib/audioFeatures";
+import { archiveVideoBlob } from "@/lib/videoArchive";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
@@ -16,6 +20,7 @@ import styles from "./page.module.css";
 
 const CAPTURE_SECONDS = 15;
 const UPLOAD_ACCEPT = ".mp4,.mov,.webm,video/mp4,video/quicktime,video/webm";
+const BUNDLED_DEMO_SAMPLES = ["/samples/demo-breathing.webm", "/samples/demo-breathing.mp4", "/samples/demo-breathing.mov"];
 
 const ACCEPTED_MIME_TYPES = new Set(["video/mp4", "video/quicktime", "video/webm"]);
 const ACCEPTED_EXTENSIONS = [".mp4", ".mov", ".webm"];
@@ -243,13 +248,100 @@ function summarizeAgentResult(value: unknown) {
   return raw.length > 120 ? `${raw.slice(0, 117)}...` : raw;
 }
 
+function wait(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function buildDemoWaveform(duration = CAPTURE_SECONDS, bins = 280): AudioFeatureTimeline {
+  const envelope: number[] = [];
+  const energy: number[] = [];
+
+  for (let index = 0; index < bins; index += 1) {
+    const time = (index / Math.max(1, bins - 1)) * duration;
+    const cycle = time % 5;
+
+    let base = 0.15;
+    if (cycle < 2) {
+      base = 0.15 + (cycle / 2) * 0.8;
+    } else if (cycle < 3) {
+      base = 0.92;
+    } else {
+      base = 0.92 - ((cycle - 3) / 2) * 0.74;
+    }
+
+    const ripple = Math.sin(time * 2.4) * 0.03 + Math.sin(time * 6.7) * 0.02;
+    const value = clamp(base + ripple, 0.05, 1);
+    const energyValue = clamp(value * 0.84 + 0.08 + Math.sin(time * 1.7) * 0.015, 0.04, 1);
+
+    envelope.push(Number(value.toFixed(4)));
+    energy.push(Number(energyValue.toFixed(4)));
+  }
+
+  return {
+    envelope,
+    energy,
+    duration,
+    sampleRate: 48000
+  };
+}
+
+function buildDemoAgentResults() {
+  return {
+    segmentation: {
+      segments: [
+        { start: 0.1, end: 2.1, label: "inhale", confidence: 0.93 },
+        { start: 2.1, end: 3.05, label: "hold", confidence: 0.9 },
+        { start: 3.05, end: 4.95, label: "exhale", confidence: 0.92 },
+        { start: 5.05, end: 7.02, label: "inhale", confidence: 0.94 },
+        { start: 7.02, end: 8.01, label: "hold", confidence: 0.9 },
+        { start: 8.01, end: 9.96, label: "exhale", confidence: 0.93 },
+        { start: 10.03, end: 12.02, label: "inhale", confidence: 0.92 },
+        { start: 12.02, end: 12.95, label: "hold", confidence: 0.89 },
+        { start: 12.95, end: 14.86, label: "exhale", confidence: 0.91 }
+      ],
+      irregularWindows: [{ start: 11.45, end: 11.95, reason: "minor cadence drift during transition" }],
+      segmentCount: 9,
+      notes: "Cycle timing is stable with one minor transition drift late in capture."
+    },
+    baselineTrend: {
+      baselineDelta: "+4.1 vs baseline",
+      confidence: "high",
+      samplesUsed: 9,
+      trendNote: "Rhythm consistency improved versus recent captures, especially on exhale pacing."
+    },
+    clinicalSummary: {
+      summary:
+        "Observed respiratory cadence is predominantly regular across the 15-second interval with one brief transition irregularity and preserved amplitude control.",
+      nonDiagnosticNote: "This summary is informational and non-diagnostic."
+    },
+    coaching: {
+      microIntervention: "Lengthen exhale by one count at each cycle to reduce late-transition drift.",
+      nextRecordingTip: "Keep chin level and maintain the same camera distance to stabilize signal quality."
+    },
+    followUp: {
+      nextWeekPrompt: "Next week, repeat this capture at the same time and compare exhale smoothness.",
+      preferredSettings: {
+        voiceCoachEnabled: true,
+        typicalCaptureTime: "08:30",
+        reducedMotion: false
+      },
+      continuityNote: "Preferences and trend context retained for next session."
+    }
+  } satisfies Record<string, unknown>;
+}
+
 export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const router = useRouter();
   const modeLabel = modeToLabel(mode);
 
   const { reducedMotion, hasOverride, toggleReducedMotion } = useReducedMotionPref();
   const { demoMode, toggleDemoMode } = useDemoMode();
+  const demoScript = useDemoScript();
   const { sessionVideo, setSessionVideo, clearSessionVideo } = useSessionVideo();
+  const { sessionAnalysis, analysisHistory, setSessionAnalysis, setAnalysisHistory, clearSessionAnalysis } =
+    useSessionAnalysis();
   const { deviceId, assistantId, threadId, isReady: identityReady, setBackboardContext } = useBackboardIdentity();
 
   const [inputMode, setInputMode] = useState<InputMode>(sessionVideo?.source ?? null);
@@ -277,9 +369,11 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const [analysisRunning, setAnalysisRunning] = useState(false);
   const [analysisResults, setAnalysisResults] = useState<Record<string, unknown> | null>(null);
   const [agentStates, setAgentStates] = useState<AgentState[]>(() => createInitialAgentState());
+  const [isDemoSample, setIsDemoSample] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sampleFileInputRef = useRef<HTMLInputElement>(null);
 
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -685,11 +779,15 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     setInputMode("record");
     setErrorMessage(null);
     setAnalysisMessage(null);
+    setAnalysisResults(null);
+    setAgentStates(createInitialAgentState());
+    clearSessionAnalysis();
     setCoachMessage(null);
     setWaveformError(null);
     setWaveformData(null);
     setVideoCurrentTime(0);
     setVideoDuration(0);
+    setIsDemoSample(false);
     setStatusMessage("Requesting camera and microphone access...");
 
     try {
@@ -750,15 +848,17 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       );
       stopMediaTracks();
     }
-  }, [clearSessionVideo, finalizeRecording, startLiveWaveform, stopMediaTracks, stopRecording]);
+  }, [clearSessionVideo, clearSessionAnalysis, finalizeRecording, startLiveWaveform, stopMediaTracks, stopRecording]);
 
   const chooseRecord = useCallback(() => {
+    setIsDemoSample(false);
     setInputMode("record");
     setErrorMessage(null);
     setStatusMessage("Press Start to capture exactly 15 seconds.");
   }, []);
 
   const triggerUploadPicker = useCallback(() => {
+    setIsDemoSample(false);
     setInputMode("upload");
     setErrorMessage(null);
     setStatusMessage("Select a video file to preview and analyze.");
@@ -791,11 +891,108 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       setVideoCurrentTime(0);
       setVideoDuration(0);
       setInputMode("upload");
+      setIsDemoSample(false);
       setStatusMessage("Uploaded video ready for Backboard analysis.");
       setAnalysisMessage(null);
+      setAnalysisResults(null);
+      setAgentStates(createInitialAgentState());
+      clearSessionAnalysis();
+      if (demoMode) {
+        demoScript.completeStep("loadSample");
+      }
       setErrorMessage(null);
     },
-    [setSessionVideo]
+    [clearSessionAnalysis, demoMode, demoScript, setSessionVideo]
+  );
+
+  const loadDemoSample = useCallback(async () => {
+    setInputMode("upload");
+    setErrorMessage(null);
+    setAnalysisMessage(null);
+    setAnalysisResults(null);
+    setAgentStates(createInitialAgentState());
+    clearSessionAnalysis();
+    setVideoCurrentTime(0);
+    setVideoDuration(0);
+    setWaveformError(null);
+    setWaveformLoading(false);
+    setStatusMessage("Loading bundled demo sample...");
+
+    let demoBlob: Blob | null = null;
+    let demoName = "demo-breathing.webm";
+
+    for (const samplePath of BUNDLED_DEMO_SAMPLES) {
+      try {
+        const response = await fetch(samplePath, { cache: "no-store" });
+        if (!response.ok) continue;
+
+        const blob = await response.blob();
+        if (!blob.size) continue;
+
+        demoBlob = blob;
+        demoName = samplePath.split("/").pop() || demoName;
+        break;
+      } catch {
+        // Try next bundled sample option.
+      }
+    }
+
+    if (!demoBlob) {
+      setStatusMessage("Bundled sample missing. Select a local sample video to continue demo mode.");
+      sampleFileInputRef.current?.click();
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(demoBlob);
+    setSessionVideo({
+      blob: demoBlob,
+      url: objectUrl,
+      source: "upload",
+      fileName: demoName,
+      createdAt: Date.now()
+    });
+
+    setWaveformData(buildDemoWaveform());
+    setIsDemoSample(true);
+    demoScript.completeStep("loadSample");
+    setStatusMessage("Demo sample loaded. Press Analyze to run the multi-agent pipeline.");
+  }, [clearSessionAnalysis, demoScript, setSessionVideo]);
+
+  const handleDemoSampleSelected = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) return;
+
+      if (!isAcceptableVideoFile(file)) {
+        setErrorMessage("Unsupported sample format. Please select mp4, mov, or webm.");
+        return;
+      }
+
+      const objectUrl = URL.createObjectURL(file);
+      setSessionVideo({
+        blob: file,
+        url: objectUrl,
+        source: "upload",
+        fileName: file.name,
+        createdAt: Date.now()
+      });
+
+      setInputMode("upload");
+      setAnalysisMessage(null);
+      setAnalysisResults(null);
+      setAgentStates(createInitialAgentState());
+      clearSessionAnalysis();
+      setVideoCurrentTime(0);
+      setVideoDuration(0);
+      setWaveformData(buildDemoWaveform());
+      setWaveformError(null);
+      setWaveformLoading(false);
+      setIsDemoSample(true);
+      demoScript.completeStep("loadSample");
+      setStatusMessage("Sample selected. Press Analyze to run the demo flow.");
+    },
+    [clearSessionAnalysis, demoScript, setSessionVideo]
   );
 
   const seekVideo = useCallback(
@@ -818,22 +1015,132 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       if (context === "scrub") {
         setStatusMessage(`Scrubbed to ${formatTimeLabel(clamped)}.`);
       } else if (markerLabel) {
+        if (demoMode) {
+          demoScript.completeStep("markers");
+        }
         setStatusMessage(`Marker: ${markerLabel} at ${formatTimeLabel(clamped)}.`);
       }
     },
-    [isRecording, sessionVideo, videoDuration, waveformDuration]
+    [demoMode, demoScript, isRecording, sessionVideo, videoDuration, waveformDuration]
+  );
+
+  const commitAnalysisResults = useCallback(
+    (
+      results: Record<string, unknown>,
+      fallbackWaveform: { envelope: number[]; energy: number[]; duration: number },
+      context: "live" | "demo"
+    ) => {
+      setAnalysisResults(results);
+      const analysisBundle = buildSessionAnalysisBundle({
+        mode,
+        results,
+        waveform: {
+          envelope: waveformData?.envelope ?? fallbackWaveform.envelope,
+          energy: waveformData?.energy ?? fallbackWaveform.energy,
+          duration: waveformDuration || fallbackWaveform.duration || CAPTURE_SECONDS
+        },
+        markers: eventMarkers.map((marker) => ({
+          time: marker.time,
+          label: marker.label
+        })),
+        history: analysisHistory
+      });
+      const nextHistory = appendAnalysisHistory(analysisHistory, analysisBundle);
+      setAnalysisHistory(nextHistory);
+      setSessionAnalysis(analysisBundle, nextHistory);
+
+      if (sessionVideo?.blob) {
+        void archiveVideoBlob(analysisBundle.createdAt, sessionVideo.blob).catch(() => {
+          // Ignore archive failures. Timeline still uses cached summaries.
+        });
+      }
+
+      if (demoMode) {
+        demoScript.completeStep("analyze");
+      }
+
+      setAnalysisMessage(context === "demo" ? "Demo pipeline complete." : "Backboard pipeline complete.");
+      setStatusMessage("Analysis complete. Open Results to review your breathing snapshot.");
+    },
+    [
+      analysisHistory,
+      demoMode,
+      demoScript,
+      eventMarkers,
+      mode,
+      sessionVideo?.blob,
+      setAnalysisHistory,
+      setSessionAnalysis,
+      waveformData?.energy,
+      waveformData?.envelope,
+      waveformDuration
+    ]
+  );
+
+  const runDemoPipeline = useCallback(
+    async (fallbackWaveform: { envelope: number[]; energy: number[]; duration: number }) => {
+      const stepDelay = reducedMotion ? 45 : 360;
+      const results = buildDemoAgentResults();
+
+      setAgentsOpen(true);
+      setAnalysisRunning(true);
+      setAnalysisResults(null);
+      setSessionAnalysis(null);
+      setAnalysisMessage("Demo multi-agent pipeline running...");
+      setErrorMessage(null);
+      setAgentStates(createInitialAgentState());
+
+      try {
+        for (const agent of AGENT_BLUEPRINT) {
+          updateAgentState(agent.key, {
+            status: "running",
+            summary: "Running"
+          });
+          await wait(stepDelay);
+
+          const output =
+            (isObject(results[agent.key]) ? (results[agent.key] as Record<string, unknown>) : { ok: true }) ?? {
+              ok: true
+            };
+
+          updateAgentState(agent.key, {
+            status: "done",
+            summary: summarizeAgentResult(output)
+          });
+          await wait(Math.max(20, Math.floor(stepDelay / 2)));
+        }
+
+        commitAnalysisResults(results, fallbackWaveform, "demo");
+      } catch {
+        setErrorMessage("Demo pipeline failed unexpectedly.");
+        setAnalysisMessage(null);
+      } finally {
+        setAnalysisRunning(false);
+      }
+    },
+    [commitAnalysisResults, reducedMotion, setSessionAnalysis, updateAgentState]
   );
 
   const handleAnalyze = useCallback(async () => {
-    if (!sessionVideo || isRecording || analysisRunning || !identityReady) return;
+    if (!sessionVideo || isRecording || analysisRunning || (!identityReady && !demoMode)) return;
 
     const envelopeForPipeline = downsample(waveformData?.envelope ?? displayedEnvelope, 96);
     const energyForPipeline = downsample(waveformData?.energy ?? displayedEnergy, 96);
     const featureStats = computeFeatureStats(energyForPipeline);
 
+    if (demoMode) {
+      await runDemoPipeline({
+        envelope: waveformData?.envelope ?? envelopeForPipeline,
+        energy: waveformData?.energy ?? energyForPipeline,
+        duration: waveformDuration || CAPTURE_SECONDS
+      });
+      return;
+    }
+
     setAgentsOpen(true);
     setAnalysisRunning(true);
     setAnalysisResults(null);
+    setSessionAnalysis(null);
     setAnalysisMessage("Backboard multi-agent pipeline running...");
     setErrorMessage(null);
     setAgentStates(createInitialAgentState());
@@ -914,9 +1221,15 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
         if (event.type === "complete") {
           setBackboardContext({ assistantId: event.assistantId, threadId: event.threadId });
-          setAnalysisResults(event.results);
-          setAnalysisMessage("Backboard pipeline complete.");
-          setStatusMessage("Analysis complete. Review agent outputs.");
+          commitAnalysisResults(
+            event.results,
+            {
+              envelope: envelopeForPipeline,
+              energy: energyForPipeline,
+              duration: waveformDuration || CAPTURE_SECONDS
+            },
+            "live"
+          );
           return;
         }
 
@@ -964,7 +1277,9 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   }, [
     analysisRunning,
     assistantId,
+    commitAnalysisResults,
     deviceId,
+    demoMode,
     displayedEnergy,
     displayedEnvelope,
     eventMarkers,
@@ -972,8 +1287,10 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     isRecording,
     mode,
     reducedMotion,
+    runDemoPipeline,
     sessionVideo,
     setBackboardContext,
+    setSessionAnalysis,
     threadId,
     updateAgentState,
     voiceCoachEnabled,
@@ -984,6 +1301,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
   const handleReset = useCallback(() => {
     clearSessionVideo();
+    clearSessionAnalysis();
     stopRecording("cancel");
     stopVoiceCoach();
     stopLiveWaveform();
@@ -1002,8 +1320,9 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     setLiveWaveform({ envelope: [], energy: [] });
     setVideoCurrentTime(0);
     setVideoDuration(0);
+    setIsDemoSample(false);
     setStatusMessage("Choose Record or Upload to begin.");
-  }, [clearSessionVideo, stopLiveWaveform, stopRecording, stopVoiceCoach]);
+  }, [clearSessionAnalysis, clearSessionVideo, stopLiveWaveform, stopRecording, stopVoiceCoach]);
 
   useEffect(() => {
     if (!isRecording) return;
@@ -1072,7 +1391,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   }, [sessionVideo?.url, isRecording]);
 
   useEffect(() => {
-    if (!sessionVideo || isRecording) return;
+    if (!sessionVideo || isRecording || isDemoSample) return;
 
     let cancelled = false;
 
@@ -1097,7 +1416,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     return () => {
       cancelled = true;
     };
-  }, [isRecording, sessionVideo?.createdAt, sessionVideo?.blob]);
+  }, [isDemoSample, isRecording, sessionVideo?.createdAt, sessionVideo?.blob]);
 
   useEffect(() => {
     setPermissionState(canRecordInBrowser() ? "idle" : "unsupported");
@@ -1174,6 +1493,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                 <Pill className={styles.statusChip}>Voice Coach: {voiceCoachEnabled ? "On" : "Off"}</Pill>
                 <Pill className={styles.statusChip}>Backboard: {analysisRunning ? "Running" : "Ready"}</Pill>
                 <Pill className={styles.statusChip}>Device: {deviceId ? `${deviceId.slice(0, 8)}...` : "Loading"}</Pill>
+                {demoMode ? <Pill className={styles.statusChip}>Demo Mode: ON</Pill> : null}
               </div>
 
               <HintText className={styles.statusText}>{statusMessage}</HintText>
@@ -1241,6 +1561,13 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                         <strong>Upload</strong>
                         <span>Bring an existing mp4, mov, or webm file.</span>
                       </button>
+
+                      {demoMode ? (
+                        <button type="button" className={styles.chooseCard} onClick={() => void loadDemoSample()}>
+                          <strong>Load Sample</strong>
+                          <span>Judge-safe demo video with guided pipeline outputs.</span>
+                        </button>
+                      ) : null}
                     </div>
                   </motion.div>
                 ) : (
@@ -1286,6 +1613,8 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                     <HintText className={styles.previewHint}>
                       {isRecording
                         ? "Live waveform uses mic input."
+                        : isDemoSample
+                          ? "Demo waveform loaded. Analyze runs a deterministic multi-agent showcase."
                         : flowStep === 3
                           ? "Waveform synced to timeline. Analyze runs Backboard multi-agent pipeline."
                           : "Preview waveform before analysis."}
@@ -1376,7 +1705,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
               type="button"
               className={styles.controlButton}
               onClick={startRecording}
-              disabled={isRecording || demoMode}
+              disabled={isRecording}
             >
               Start
             </GlowButton>
@@ -1408,9 +1737,19 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
             <button
               type="button"
               className={styles.secondaryButton}
+              onClick={() => void loadDemoSample()}
+              disabled={isRecording || analysisRunning}
+            >
+              Load Sample
+            </button>
+          </motion.div>
+
+          <motion.div variants={fadeUp}>
+            <button
+              type="button"
+              className={styles.secondaryButton}
               onClick={() => setVoiceCoachEnabled((enabled) => !enabled)}
               aria-pressed={voiceCoachEnabled}
-              disabled={demoMode}
             >
               Voice Coach: {voiceCoachEnabled ? "On" : "Off"}
             </button>
@@ -1421,7 +1760,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
               type="button"
               className={styles.controlButton}
               onClick={handleAnalyze}
-              disabled={!sessionVideo || isRecording || demoMode || analysisRunning || !identityReady}
+              disabled={!sessionVideo || isRecording || analysisRunning || (!identityReady && !demoMode)}
             >
               {analysisRunning ? "Analyzing..." : "Analyze"}
             </GlowButton>
@@ -1439,6 +1778,23 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
           </motion.div>
 
           <motion.div variants={fadeUp}>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={() => router.push("/results")}
+              disabled={!sessionAnalysis || isRecording}
+            >
+              Results
+            </button>
+          </motion.div>
+
+          <motion.div variants={fadeUp}>
+            <button type="button" className={styles.secondaryButton} onClick={() => router.push("/history")}>
+              History
+            </button>
+          </motion.div>
+
+          <motion.div variants={fadeUp}>
             <button type="button" className={styles.ghostButton} onClick={() => router.push("/")}>
               Back
             </button>
@@ -1452,6 +1808,48 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
           className={styles.fileInput}
           onChange={handleUploadSelected}
         />
+
+        <input
+          ref={sampleFileInputRef}
+          type="file"
+          accept={UPLOAD_ACCEPT}
+          className={styles.fileInput}
+          onChange={handleDemoSampleSelected}
+        />
+
+        {demoMode && !demoScript.dismissed ? (
+          <GlassCard className={styles.demoScript}>
+            <div className={styles.demoScriptTop}>
+              <p className={styles.demoScriptTitle}>Demo Script</p>
+              <button type="button" className={styles.demoScriptDismiss} onClick={demoScript.dismiss}>
+                Dismiss
+              </button>
+            </div>
+            <ol className={styles.demoScriptList}>
+              <li className={cx(styles.demoStep, demoScript.steps.loadSample && styles.demoStepDone)}>
+                Load sample
+              </li>
+              <li className={cx(styles.demoStep, demoScript.steps.analyze && styles.demoStepDone)}>Analyze</li>
+              <li className={cx(styles.demoStep, demoScript.steps.markers && styles.demoStepDone)}>
+                Open explainability markers
+              </li>
+              <li className={cx(styles.demoStep, demoScript.steps.report && styles.demoStepDone)}>Generate clinician report</li>
+              <li className={cx(styles.demoStep, demoScript.steps.readAloud && styles.demoStepDone)}>
+                Play ElevenLabs read aloud
+              </li>
+            </ol>
+            <HintText className={styles.demoScriptHint}>
+              Progress {demoScript.completedCount}/{demoScript.totalCount}. Continue steps 4-5 on Results.
+            </HintText>
+            <button type="button" className={styles.demoScriptReset} onClick={demoScript.reset}>
+              Reset Script
+            </button>
+          </GlassCard>
+        ) : demoMode ? (
+          <button type="button" className={styles.demoScriptShow} onClick={demoScript.show}>
+            Show Demo Script
+          </button>
+        ) : null}
       </AppShell>
     </main>
   );

@@ -41,8 +41,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "`text` is required." }, { status: 400 });
   }
 
-  if (text.length > 220) {
-    return NextResponse.json({ error: "`text` must be 220 characters or fewer." }, { status: 400 });
+  if (text.length > 3200) {
+    return NextResponse.json({ error: "`text` must be 3200 characters or fewer." }, { status: 400 });
   }
 
   const voiceId = payload.voiceId?.trim() || DEFAULT_VOICE_ID;
