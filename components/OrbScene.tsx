@@ -32,6 +32,7 @@ import styles from "./orb-scene.module.css";
 type OrbSceneProps = {
   reducedMotion?: boolean;
   zoomRequestId?: number;
+  demoMode?: boolean;
   onTransitionChange?: (isTransitioning: boolean) => void;
 };
 
@@ -442,6 +443,7 @@ function HeroModel({
 export default function OrbScene({
   reducedMotion = false,
   zoomRequestId = 0,
+  demoMode = false,
   onTransitionChange
 }: OrbSceneProps) {
   const [supportsWebGL, setSupportsWebGL] = useState(true);
@@ -466,14 +468,18 @@ export default function OrbScene({
   }, []);
 
   const handlePortalComplete = useCallback(() => {
+    if (demoMode) {
+      onTransitionChange?.(false);
+      return;
+    }
     if (navigatingRef.current) return;
     navigatingRef.current = true;
     router.push(RECORD_ROUTE);
-  }, [router]);
+  }, [demoMode, onTransitionChange, router]);
 
   const beginPortal = useCallback(
     (targetPoint?: Vector3) => {
-      if (navigatingRef.current || modelError) return;
+      if (navigatingRef.current || modelError || demoMode) return;
 
       if (reducedMotion) {
         navigatingRef.current = true;
@@ -487,7 +493,7 @@ export default function OrbScene({
       onTransitionChange?.(true);
       portal.pendingTarget = targetPoint ? targetPoint.clone() : new Vector3(0, -0.05, 0);
     },
-    [modelError, onTransitionChange, reducedMotion, router]
+    [demoMode, modelError, onTransitionChange, reducedMotion, router]
   );
 
   useEffect(() => {

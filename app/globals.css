@@ -1,10 +1,15 @@
 :root {
-  --bg-1: #02040a;
-  --bg-2: #030910;
-  --bg-3: #06162b;
+  --bg-950: #02040b;
+  --bg-900: #041025;
+  --bg-850: #071d37;
+  --indigo-secondary: #5e71bd;
+  --accent-cyan: #78e2ff;
+  --accent-teal: #3ec4da;
   --text-main: #e9f5ff;
-  --text-subtle: rgba(216, 234, 248, 0.72);
-  --accent: #7edfff;
+  --text-subtle: rgba(206, 228, 243, 0.74);
+  --border-soft: rgba(132, 208, 245, 0.24);
+  --radius-card: 1.05rem;
+  --radius-pill: 999px;
 }
 
 * {
@@ -23,12 +28,16 @@ body {
   font-family: "Avenir Next", "Century Gothic", "Trebuchet MS", sans-serif;
   color: var(--text-main);
   background:
-    radial-gradient(120% 120% at 12% 18%, rgba(78, 134, 202, 0.1), transparent 50%),
-    radial-gradient(110% 110% at 84% 86%, rgba(35, 186, 224, 0.14), transparent 55%),
-    linear-gradient(160deg, var(--bg-1), var(--bg-2) 52%, var(--bg-3));
+    radial-gradient(140% 120% at 10% 12%, rgba(91, 126, 203, 0.16), transparent 52%),
+    radial-gradient(110% 110% at 82% 90%, rgba(56, 194, 226, 0.18), transparent 55%),
+    linear-gradient(160deg, var(--bg-950), var(--bg-900) 52%, var(--bg-850));
 }
 
 a {
   color: inherit;
   text-decoration: none;
+}
+
+::selection {
+  background: rgba(89, 200, 242, 0.3);
 }

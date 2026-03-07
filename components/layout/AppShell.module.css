@@ -1,0 +1,155 @@
+.shell {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: clamp(1rem, 2vw, 2rem) clamp(1rem, 4vw, 3.5rem);
+}
+
+.passThrough {
+  pointer-events: none;
+}
+
+.interactive {
+  pointer-events: auto;
+}
+
+.topBar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.brandWrap {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.brand {
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(236, 248, 255, 0.94);
+}
+
+.controls {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+}
+
+.settingsButton {
+  box-shadow: 0 0 18px rgba(86, 198, 255, 0.2);
+}
+
+.settingsPanelWrap {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: min(300px, 78vw);
+}
+
+.settingsPanel {
+  padding: 0.8rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.toggleRow {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  align-items: center;
+  cursor: pointer;
+}
+
+.toggleRowLabel {
+  display: grid;
+  justify-items: start;
+  gap: 0.1rem;
+}
+
+.toggleLabel {
+  margin: 0;
+  color: rgba(231, 247, 255, 0.95);
+  letter-spacing: 0.03em;
+  font-size: 0.82rem;
+}
+
+.toggleHint {
+  margin: 0;
+  color: rgba(176, 212, 232, 0.76);
+  font-size: 0.74rem;
+  letter-spacing: 0.03em;
+}
+
+.toggleTrack {
+  width: 2.25rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  border: 1px solid rgba(135, 205, 236, 0.4);
+  background: rgba(9, 20, 35, 0.76);
+  position: relative;
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+
+.toggleKnob {
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 999px;
+  background: rgba(211, 236, 249, 0.92);
+  position: absolute;
+  top: 50%;
+  left: 0.2rem;
+  transform: translateY(-50%);
+  transition: left 180ms ease, background-color 180ms ease;
+}
+
+.toggleActive {
+  background: rgba(18, 90, 112, 0.9);
+  border-color: rgba(128, 223, 255, 0.68);
+}
+
+.toggleActive .toggleKnob {
+  left: calc(100% - 1.1rem);
+  background: rgba(229, 248, 255, 0.98);
+}
+
+.panelDivider {
+  margin: 0.2rem 0;
+}
+
+.sourceHint {
+  margin: 0;
+  color: rgba(172, 214, 236, 0.7);
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+}
+
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 720px) {
+  .topBar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .controls {
+    align-self: flex-start;
+  }
+}

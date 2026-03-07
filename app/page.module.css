@@ -6,13 +6,6 @@
 }
 
 .overlay {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  padding: clamp(1rem, 2vw, 2rem) clamp(1rem, 4vw, 3.5rem);
-  pointer-events: none;
   transition: opacity 520ms ease, transform 520ms ease;
 }
 
@@ -21,58 +14,8 @@
   transform: translateY(12px);
 }
 
-.topBar {
+.heroWrap {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.brandWrap {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  pointer-events: auto;
-}
-
-.brand {
-  margin: 0;
-  font-size: 0.95rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: rgba(234, 248, 255, 0.94);
-}
-
-.modePill {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.3rem 0.8rem;
-  border-radius: 999px;
-  border: 1px solid rgba(127, 214, 255, 0.38);
-  color: rgba(189, 233, 255, 0.94);
-  font-size: 0.8rem;
-  letter-spacing: 0.04em;
-  background: rgba(4, 20, 37, 0.52);
-  backdrop-filter: blur(8px);
-}
-
-.motionToggle {
-  pointer-events: auto;
-  border: 1px solid rgba(154, 229, 255, 0.28);
-  background: rgba(7, 18, 32, 0.55);
-  color: rgba(213, 240, 255, 0.9);
-  border-radius: 999px;
-  font-size: 0.76rem;
-  letter-spacing: 0.04em;
-  padding: 0.45rem 0.85rem;
-  cursor: pointer;
-  transition: border-color 180ms ease, background-color 180ms ease;
-}
-
-.motionToggle:hover {
-  border-color: rgba(154, 229, 255, 0.52);
-  background: rgba(8, 23, 39, 0.7);
 }
 
 .hero {
@@ -88,8 +31,6 @@
 .title {
   margin: 0;
   font-size: clamp(2.05rem, 5.8vw, 4.5rem);
-  line-height: 1.03;
-  letter-spacing: 0.015em;
   color: #f5fbff;
   text-shadow:
     0 0 40px rgba(93, 198, 255, 0.36),
@@ -114,6 +55,7 @@
 .cta {
   pointer-events: auto;
   margin-top: 0.7rem;
+  min-width: 252px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -131,7 +73,6 @@
     0 0 24px rgba(101, 198, 255, 0.34),
     0 8px 26px rgba(4, 10, 19, 0.45);
   transition: transform 220ms ease, box-shadow 220ms ease;
-  cursor: pointer;
 }
 
 .cta:hover {
@@ -155,17 +96,13 @@
 }
 
 @media (max-width: 720px) {
-  .topBar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .motionToggle {
-    align-self: flex-start;
-  }
-
   .hero {
     margin-top: auto;
     margin-bottom: auto;
+  }
+
+  .cta {
+    min-width: 0;
+    width: min(100%, 290px);
   }
 }
