@@ -1,0 +1,67 @@
+.main {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.2rem;
+  background:
+    radial-gradient(130% 130% at 20% 0%, rgba(66, 114, 170, 0.22), transparent 54%),
+    radial-gradient(100% 120% at 90% 100%, rgba(34, 176, 211, 0.2), transparent 58%),
+    linear-gradient(160deg, #02040b, #04101f 58%, #071e36);
+}
+
+.card {
+  width: min(560px, 100%);
+  border-radius: 1.1rem;
+  border: 1px solid rgba(141, 210, 245, 0.24);
+  background:
+    linear-gradient(180deg, rgba(11, 24, 41, 0.78), rgba(8, 18, 32, 0.85)),
+    rgba(4, 11, 19, 0.7);
+  backdrop-filter: blur(12px);
+  padding: clamp(1.2rem, 3vw, 2.1rem);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.38);
+}
+
+.brand {
+  margin: 0;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: rgba(187, 229, 255, 0.86);
+  font-size: 0.82rem;
+}
+
+.title {
+  margin: 0.45rem 0 0;
+  font-size: clamp(1.9rem, 4vw, 2.8rem);
+  color: #f3fbff;
+}
+
+.modeMeta {
+  margin: 0.55rem 0 0;
+  color: rgba(195, 224, 241, 0.84);
+  font-size: 0.96rem;
+}
+
+.modeMeta span {
+  color: rgba(136, 222, 255, 0.98);
+  letter-spacing: 0.05em;
+}
+
+.copy {
+  margin: 0.9rem 0 0;
+  color: rgba(208, 231, 245, 0.76);
+}
+
+.link {
+  margin-top: 1.2rem;
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 0.6rem 1rem;
+  border: 1px solid rgba(151, 225, 255, 0.35);
+  background: rgba(10, 28, 45, 0.66);
+  color: rgba(223, 243, 255, 0.95);
+  transition: border-color 180ms ease;
+}
+
+.link:hover {
+  border-color: rgba(177, 236, 255, 0.6);
+}

@@ -1,0 +1,31 @@
+{
+  "name": "respira-snap",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "predev": "node -e \"const fs=require('fs'); fs.rmSync('.next',{ recursive:true, force:true });\"",
+    "dev": "next dev",
+    "clean": "node -e \"const fs=require('fs'); fs.rmSync('.next',{ recursive:true, force:true });\"",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
+    "@react-three/postprocessing": "^2.16.3",
+    "next": "^14.2.24",
+    "postprocessing": "^6.37.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.164.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.18",
+    "@types/react": "^18.3.20",
+    "@types/react-dom": "^18.3.6",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.24",
+    "typescript": "^5.7.3"
+  }
+}

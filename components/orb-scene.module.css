@@ -1,0 +1,40 @@
+.canvasWrap {
+  position: absolute;
+  inset: 0;
+}
+
+.errorWrap {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 0.5rem;
+  padding: 1.2rem;
+  text-align: center;
+  background:
+    radial-gradient(70% 60% at 50% 35%, rgba(21, 58, 96, 0.24), transparent 60%),
+    linear-gradient(160deg, #02050d, #03111f 52%, #08243f);
+}
+
+.errorTitle {
+  margin: 0;
+  color: #e7f4ff;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.88rem;
+}
+
+.errorPath {
+  margin: 0;
+  color: rgba(185, 219, 240, 0.82);
+  font-size: 0.84rem;
+}
+
+.fallback {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(40% 38% at 52% 45%, rgba(91, 214, 255, 0.17), transparent 64%),
+    radial-gradient(70% 56% at 70% 20%, rgba(32, 87, 143, 0.24), transparent 67%),
+    linear-gradient(160deg, #02050d, #030a15 54%, #08213b);
+}

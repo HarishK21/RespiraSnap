@@ -1,0 +1,34 @@
+:root {
+  --bg-1: #02040a;
+  --bg-2: #030910;
+  --bg-3: #06162b;
+  --text-main: #e9f5ff;
+  --text-subtle: rgba(216, 234, 248, 0.72);
+  --accent: #7edfff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100%;
+}
+
+body {
+  font-family: "Avenir Next", "Century Gothic", "Trebuchet MS", sans-serif;
+  color: var(--text-main);
+  background:
+    radial-gradient(120% 120% at 12% 18%, rgba(78, 134, 202, 0.1), transparent 50%),
+    radial-gradient(110% 110% at 84% 86%, rgba(35, 186, 224, 0.14), transparent 55%),
+    linear-gradient(160deg, var(--bg-1), var(--bg-2) 52%, var(--bg-3));
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
