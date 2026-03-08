@@ -6,7 +6,8 @@ RespiraSnap is an AI-powered respiratory analysis tool that provides immediate, 
 
 In today's fast-paced world, breathing mechanics are often overlooked, yet they are a fundamental indicator of stress, focus, and overall nervous system regulation. RespiraSnap bridges the gap between subjective feeling and objective data, turning the microphone you already have into a powerful biosensor.
 
-![RespiraSnap Capture UI](file:///C:/Users/light/.gemini/antigravity/brain/4a959118-6a96-4efd-bd23-f1427fc2bbe7/analysis_progress_state_1772957188135.png)
+<img width="1919" height="941" alt="image" src="https://github.com/user-attachments/assets/1980da76-27f6-40fd-a09f-3991d5d30294" />
+
 
 ## How It Works
 1. **Capture:** The user records 15 seconds of live breathing audio (guided by a calming voice coach) or uploads a pre-recorded sample.
