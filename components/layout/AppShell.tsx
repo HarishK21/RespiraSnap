@@ -1,9 +1,15 @@
 "use client";
 
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
+import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { fadeUp, hoverGlow, pageTransition } from "@/components/motion/presets";
 import { Divider, GlassCard, HintText, IconButton, Pill, Toast } from "@/components/ui/primitives";
+import { useAuthUser } from "@/hooks/useAuthUser";
+import { useBackboardIdentity } from "@/hooks/useBackboardIdentity";
+import { useSessionAnalysis } from "@/hooks/useSessionAnalysis";
+import { useSessionVideo } from "@/hooks/useSessionVideo";
+import { clearClientRespiraData } from "@/lib/client/resetData";
 import styles from "./AppShell.module.css";
 
 type AppShellProps = {
@@ -55,9 +61,17 @@ export default function AppShell({
   passThrough = false
 }: AppShellProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState("");
   const [toastMessage, setToastMessage] = useState("");
   const [toastVisible, setToastVisible] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { user, isLoading, logout } = useAuthUser();
+  const { deviceId, assistantId } = useBackboardIdentity();
+  const { clearAllSessionAnalysis } = useSessionAnalysis();
+  const { clearSessionVideo } = useSessionVideo();
+  const allowResetAllDemo = process.env.NEXT_PUBLIC_DEMO_RESET_ALL === "true";
 
   useEffect(() => {
     return () => {
@@ -92,6 +106,64 @@ export default function AppShell({
     flashToast(nextState ? "Demo mode enabled" : "Demo mode disabled");
   };
 
+  const handleLogout = async () => {
+    await logout();
+    flashToast("Logged out");
+    setSettingsOpen(false);
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
+  };
+
+  const handleReset = async () => {
+    if (resetBusy) return;
+    setResetBusy(true);
+    setResetError("");
+
+    try {
+      const response = await fetch("/api/reset", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          deviceId,
+          assistantId,
+          resetAll: allowResetAllDemo
+        })
+      });
+
+      if (!response.ok) {
+        let detail = "Unable to clear saved data.";
+        try {
+          const payload = (await response.json()) as { error?: string };
+          if (payload.error) detail = payload.error;
+        } catch {
+          // Keep fallback.
+        }
+        throw new Error(detail);
+      }
+
+      clearSessionVideo();
+      clearAllSessionAnalysis();
+      await clearClientRespiraData();
+
+      setSettingsOpen(false);
+      setResetOpen(false);
+      flashToast("Data cleared");
+
+      setTimeout(() => {
+        if (typeof window !== "undefined") {
+          window.location.href = "/";
+        }
+      }, 260);
+    } catch (error) {
+      setResetError(error instanceof Error ? error.message : "Unable to clear saved data.");
+    } finally {
+      setResetBusy(false);
+    }
+  };
+
   return (
     <MotionConfig reducedMotion={reducedMotion ? "always" : "never"}>
       <motion.div
@@ -107,6 +179,10 @@ export default function AppShell({
           </div>
 
           <div className={cx(styles.controls, passThrough && styles.interactive)}>
+            <Pill className={styles.userPill}>
+              {isLoading ? "Account: Loading" : user ? `Account: ${user.name}` : "Account: Guest"}
+            </Pill>
+
             <motion.div {...hoverGlow} transition={{ duration: 0.2 }}>
               <IconButton
                 className={styles.settingsButton}
@@ -148,6 +224,38 @@ export default function AppShell({
                       active={demoMode}
                       onToggle={handleDemoModeToggle}
                     />
+                    {user ? (
+                      <>
+                        <Divider className={styles.panelDivider} />
+                        <button type="button" className={styles.resetButton} onClick={() => setResetOpen(true)}>
+                          Reset Data
+                        </button>
+                        <HintText className={styles.sourceHint}>Clear snapshots, baseline memory, and local cache.</HintText>
+                      </>
+                    ) : null}
+                    <Divider className={styles.panelDivider} />
+                    {isLoading ? (
+                      <HintText className={styles.sourceHint}>Checking account status...</HintText>
+                    ) : user ? (
+                      <div className={styles.authPanel}>
+                        <HintText className={styles.sourceHint}>Signed in as {user.email}</HintText>
+                        <button type="button" className={styles.authButton} onClick={handleLogout}>
+                          Log out
+                        </button>
+                      </div>
+                    ) : (
+                      <div className={styles.authPanel}>
+                        <HintText className={styles.sourceHint}>Sign in to sync snapshots to MongoDB.</HintText>
+                        <div className={styles.authLinks}>
+                          <Link href="/login" className={styles.authButton}>
+                            Login
+                          </Link>
+                          <Link href="/signup" className={styles.authButton}>
+                            Sign up
+                          </Link>
+                        </div>
+                      </div>
+                    )}
                     <HintText className={styles.sourceHint}>
                       Reduced motion source: {reducedMotionSource}
                     </HintText>
@@ -160,6 +268,51 @@ export default function AppShell({
 
         <div className={cx(styles.content, contentClassName)}>{children}</div>
       </motion.div>
+
+      <AnimatePresence>
+        {resetOpen ? (
+          <motion.div
+            className={styles.resetOverlay}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => {
+              if (resetBusy) return;
+              setResetOpen(false);
+            }}
+          >
+            <motion.div
+              className={styles.resetModal}
+              variants={fadeUp}
+              initial="hidden"
+              animate="visible"
+              exit="hidden"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <GlassCard className={styles.resetCard}>
+                <p className={styles.resetTitle}>Reset all RespiraSnap data?</p>
+                <p className={styles.resetBody}>
+                  This will delete all saved snapshots, baseline history, and cached reports for this device/demo.
+                </p>
+                {resetError ? <p className={styles.resetError}>{resetError}</p> : null}
+                <div className={styles.resetActions}>
+                  <button
+                    type="button"
+                    className={styles.resetCancel}
+                    onClick={() => setResetOpen(false)}
+                    disabled={resetBusy}
+                  >
+                    Cancel
+                  </button>
+                  <button type="button" className={styles.resetConfirm} onClick={handleReset} disabled={resetBusy}>
+                    {resetBusy ? "Resetting..." : "Reset"}
+                  </button>
+                </div>
+              </GlassCard>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
       <Toast visible={toastVisible} message={toastMessage} />
     </MotionConfig>

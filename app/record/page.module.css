@@ -201,20 +201,20 @@
 .previewFrame {
   position: relative;
   width: 100%;
-  min-height: clamp(300px, 54vh, 520px);
+  min-height: clamp(150px, 24vh, 220px);
   border-radius: 1rem;
   overflow: hidden;
   border: 1px solid rgba(129, 208, 250, 0.28);
   background:
     radial-gradient(100% 110% at 50% 10%, rgba(64, 145, 197, 0.18), transparent 54%),
     linear-gradient(160deg, rgba(4, 12, 22, 0.86), rgba(5, 16, 28, 0.96));
+  display: grid;
+  place-items: center;
 }
 
-.previewVideo {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  background: #020913;
+.previewAudio {
+  width: min(92%, 720px);
+  z-index: 1;
 }
 
 .emptyState {
@@ -555,7 +555,7 @@
   }
 
   .previewFrame {
-    min-height: clamp(250px, 44vh, 420px);
+    min-height: clamp(132px, 22vh, 180px);
   }
 
   .controlBar {

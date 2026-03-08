@@ -111,6 +111,49 @@
   pointer-events: none;
 }
 
+.markerDot-rhythm {
+  background: rgba(119, 229, 255, 0.96);
+}
+
+.markerDot-segment {
+  background: rgba(130, 247, 200, 0.96);
+}
+
+.markerDot-interruption,
+.markerDot-irregular {
+  background: rgba(255, 186, 108, 0.96);
+  border-color: rgba(255, 212, 163, 0.9);
+}
+
+.markerDot-hold {
+  background: rgba(156, 172, 255, 0.95);
+}
+
+.markerStem-rhythm {
+  background: rgba(139, 232, 255, 0.44);
+}
+
+.markerStem-segment {
+  background: rgba(152, 241, 210, 0.42);
+}
+
+.markerStem-interruption,
+.markerStem-irregular {
+  background: rgba(255, 196, 134, 0.45);
+}
+
+.markerStem-hold {
+  background: rgba(164, 179, 255, 0.44);
+}
+
+.markerLabel-rhythm,
+.markerLabel-segment,
+.markerLabel-interruption,
+.markerLabel-irregular,
+.markerLabel-hold {
+  color: rgba(219, 243, 255, 0.9);
+}
+
 .meta {
   display: flex;
   justify-content: space-between;

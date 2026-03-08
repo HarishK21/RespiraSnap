@@ -41,6 +41,13 @@
   position: relative;
   display: flex;
   align-items: flex-start;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.userPill {
+  font-size: 0.66rem;
 }
 
 .settingsButton {
@@ -130,11 +137,134 @@
   margin: 0.2rem 0;
 }
 
+.authPanel {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.authLinks {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.authButton {
+  border-radius: 999px;
+  border: 1px solid rgba(132, 208, 244, 0.42);
+  background: rgba(7, 19, 34, 0.8);
+  color: rgba(222, 244, 255, 0.94);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.35rem 0.6rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.authButton:hover {
+  border-color: rgba(154, 229, 255, 0.7);
+  background: rgba(13, 38, 58, 0.9);
+}
+
 .sourceHint {
   margin: 0;
   color: rgba(172, 214, 236, 0.7);
   font-size: 0.72rem;
   letter-spacing: 0.03em;
+}
+
+.resetButton {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 124, 124, 0.58);
+  background: rgba(36, 10, 18, 0.6);
+  color: rgba(255, 214, 214, 0.95);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.38rem 0.7rem;
+  justify-self: start;
+  cursor: pointer;
+  box-shadow: 0 0 14px rgba(255, 84, 98, 0.18);
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.resetButton:hover {
+  border-color: rgba(255, 162, 162, 0.82);
+  background: rgba(54, 14, 24, 0.84);
+  box-shadow: 0 0 18px rgba(255, 92, 106, 0.28);
+}
+
+.resetOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(2, 8, 18, 0.58);
+  backdrop-filter: blur(2px);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.resetModal {
+  width: min(480px, 92vw);
+}
+
+.resetCard {
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+}
+
+.resetTitle {
+  margin: 0;
+  color: rgba(239, 248, 255, 0.96);
+  font-size: 1.02rem;
+  letter-spacing: 0.03em;
+}
+
+.resetBody {
+  margin: 0;
+  color: rgba(190, 219, 236, 0.82);
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
+.resetError {
+  margin: 0;
+  color: rgba(255, 186, 186, 0.96);
+  font-size: 0.8rem;
+}
+
+.resetActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.resetCancel,
+.resetConfirm {
+  border-radius: 999px;
+  border: 1px solid rgba(121, 182, 216, 0.38);
+  background: rgba(8, 21, 36, 0.76);
+  color: rgba(226, 245, 255, 0.95);
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.4rem 0.78rem;
+  cursor: pointer;
+}
+
+.resetConfirm {
+  border-color: rgba(255, 124, 124, 0.6);
+  background: rgba(47, 12, 20, 0.78);
+  color: rgba(255, 224, 224, 0.98);
+  box-shadow: 0 0 16px rgba(255, 96, 112, 0.22);
+}
+
+.resetCancel:disabled,
+.resetConfirm:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
 }
 
 .content {

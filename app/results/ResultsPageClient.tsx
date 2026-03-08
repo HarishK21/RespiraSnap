@@ -9,6 +9,7 @@ import { useDemoScript } from "@/hooks/useDemoScript";
 import { useReducedMotionPref } from "@/hooks/useReducedMotionPref";
 import { useSessionAnalysis } from "@/hooks/useSessionAnalysis";
 import { useSessionVideo } from "@/hooks/useSessionVideo";
+import type { SessionPillars } from "@/lib/analysisBundle";
 import { AnimatePresence, motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +20,8 @@ type TileKey = "pattern" | "explainability" | "clinician";
 const TREND_WIDTH = 360;
 const TREND_HEIGHT = 112;
 const REPORT_TITLE = "RespiraSnap Clinician Summary";
+const DEBUG_WIDTH = 1000;
+const DEBUG_HEIGHT = 120;
 
 function cx(...classNames: Array<string | undefined | null | false>) {
   return classNames.filter(Boolean).join(" ");
@@ -39,6 +42,86 @@ function formatConfidenceLabel(value: "low" | "med" | "high") {
   if (value === "high") return "High confidence";
   if (value === "med") return "Medium confidence";
   return "Low confidence";
+}
+
+function fallbackPillars(score: number, markerCount: number): SessionPillars {
+  const rhythmValue = score >= 82 ? "Stable" : score >= 68 ? "Slightly Variable" : "Variable";
+  const interruptionCount = Math.max(0, Math.min(markerCount, 5));
+  const quality = interruptionCount <= 1 ? "Good" : interruptionCount <= 3 ? "Fair" : "Poor";
+
+  return {
+    rhythm: {
+      shortLabel: "Rhythm",
+      value: rhythmValue,
+      tone: rhythmValue === "Stable" ? "good" : rhythmValue === "Slightly Variable" ? "warning" : "poor",
+      subtext: "Cycle timing estimate from waveform.",
+      cycleCount: 3,
+      timingVariance: null,
+      confidence: "low"
+    },
+    exhaleRatio: {
+      shortLabel: "Exhale Ratio",
+      value: "—",
+      tone: "warning",
+      subtext: "Segmentation needed for ratio.",
+      ratio: null,
+      uncertain: true,
+      adherence: "Unknown",
+      confidence: "low"
+    },
+    interruptions: {
+      shortLabel: "Interruptions",
+      value: String(interruptionCount),
+      tone: quality === "Good" ? "good" : quality === "Fair" ? "warning" : "poor",
+      subtext: `${quality} capture quality.`,
+      count: interruptionCount,
+      quality,
+      timestamps: [],
+      seconds: [],
+      markerSeconds: [],
+      lowConfidence: true,
+      confidence: "low"
+    },
+    holdDetected: {
+      shortLabel: "Hold",
+      value: "Unclear",
+      tone: "warning",
+      subtext: "Low confidence.",
+      enabled: true,
+      detected: null,
+      durationSeconds: null,
+      markerTime: null,
+      confidence: "low"
+    }
+  };
+}
+
+function pillarToneClass(tone: SessionPillars["rhythm"]["tone"]) {
+  if (tone === "good") return styles.pillarToneGood;
+  if (tone === "warning") return styles.pillarToneWarning;
+  if (tone === "poor") return styles.pillarTonePoor;
+  return styles.pillarToneNeutral;
+}
+
+function buildFallbackPatternBullets(pillars: SessionPillars) {
+  return [
+    `Rhythm: ${pillars.rhythm.value}`,
+    `Exhale ratio: ${pillars.exhaleRatio.value}`,
+    `Interruptions: ${pillars.interruptions.value} (quality: ${pillars.interruptions.quality.toLowerCase()})`
+  ];
+}
+
+function buildDebugLine(values: number[], maxValue: number) {
+  if (values.length === 0) return "";
+
+  return values
+    .map((value, index) => {
+      const x = values.length === 1 ? DEBUG_WIDTH / 2 : (index / (values.length - 1)) * DEBUG_WIDTH;
+      const ratio = maxValue > 0 ? clamp(value / maxValue, 0, 1) : 0;
+      const y = DEBUG_HEIGHT - ratio * (DEBUG_HEIGHT - 8) - 4;
+      return `${index === 0 ? "M" : "L"} ${x},${y}`;
+    })
+    .join(" ");
 }
 
 export default function ResultsPageClient() {
@@ -65,8 +148,9 @@ export default function ResultsPageClient() {
   const [actionMessage, setActionMessage] = useState("");
   const [readAloudError, setReadAloudError] = useState("");
   const [readAloudBusy, setReadAloudBusy] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLAudioElement>(null);
   const reportAudioRef = useRef<HTMLAudioElement | null>(null);
   const reportAudioUrlRef = useRef<string | null>(null);
   const reportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -77,12 +161,22 @@ export default function ResultsPageClient() {
     return videoDuration;
   }, [sessionAnalysis?.waveform.duration, videoDuration]);
 
+  const pillars = useMemo(() => {
+    if (!sessionAnalysis) return null;
+    return sessionAnalysis.pillars ?? fallbackPillars(sessionAnalysis.score, sessionAnalysis.markers.length);
+  }, [sessionAnalysis]);
+
+  const isDevDebug = process.env.NODE_ENV !== "production";
+  const preprocessDebug = sessionAnalysis?.preprocessDebug ?? null;
+
   const markers = useMemo<WaveformMarker[]>(() => {
     if (!sessionAnalysis) return [];
     return sessionAnalysis.markers.map((marker) => ({
       id: marker.id,
       time: marker.time,
-      label: marker.label
+      label: marker.label,
+      type: marker.type,
+      detail: marker.detail
     }));
   }, [sessionAnalysis]);
 
@@ -143,6 +237,37 @@ export default function ResultsPageClient() {
     return `M ${top[0]} L ${top.slice(1).join(" ")} L ${bottom.join(" ")} Z`;
   }, [trendEntries]);
 
+  const patternBullets = useMemo(() => {
+    if (!sessionAnalysis || !pillars) return [] as string[];
+    return (sessionAnalysis.patternBullets?.length ? sessionAnalysis.patternBullets : buildFallbackPatternBullets(pillars))
+      .slice(0, 3);
+  }, [pillars, sessionAnalysis]);
+
+  const reportPreviewText = useMemo(() => {
+    if (reportText.trim()) return reportText;
+    return sessionAnalysis?.reportLines?.join("\n") ?? "";
+  }, [reportText, sessionAnalysis?.reportLines]);
+
+  const debugChart = useMemo(() => {
+    if (!preprocessDebug?.rmsSmooth?.length) return null;
+
+    const rms = preprocessDebug.rmsSmooth;
+    const threshold = preprocessDebug.threshold?.length
+      ? preprocessDebug.threshold
+      : Array.from({ length: rms.length }, () => 0);
+    const maxValue = Math.max(
+      ...rms,
+      ...threshold,
+      0.0001
+    );
+
+    return {
+      rmsPath: buildDebugLine(rms, maxValue),
+      thresholdPath: buildDebugLine(threshold, maxValue),
+      interruptions: preprocessDebug.interruptions ?? []
+    };
+  }, [preprocessDebug]);
+
   const stopReadAloud = useCallback(() => {
     if (reportAudioRef.current) {
       reportAudioRef.current.pause();
@@ -170,9 +295,9 @@ export default function ResultsPageClient() {
       setVideoCurrentTime(clampedTime);
 
       if (reason === "marker" && label) {
-        setActiveMarkerLabel(`${label} • ${formatTime(clampedTime)}`);
+        setActiveMarkerLabel(label);
       } else if (reason === "key") {
-        setActiveMarkerLabel(`Key moment • ${formatTime(clampedTime)}`);
+        setActiveMarkerLabel(`Key moment · ${formatTime(clampedTime)}`);
       }
     },
     [sessionAnalysis?.waveform.duration, waveformDuration]
@@ -197,30 +322,31 @@ export default function ResultsPageClient() {
 
     reportTimerRef.current = setTimeout(
       () => {
-        setReportText(sessionAnalysis.reportText);
+        const nextReport = sessionAnalysis.reportText || sessionAnalysis.reportLines?.join("\n") || "";
+        setReportText(nextReport);
         setReportBusy(false);
         if (demoMode) {
           demoScript.completeStep("report");
         }
-        setActionMessage("Report refreshed from Backboard output.");
+        setActionMessage("Structured report updated.");
       },
-      reducedMotion ? 40 : 260
+      reducedMotion ? 40 : 220
     );
   }, [demoMode, demoScript, reducedMotion, sessionAnalysis]);
 
   const handleCopyReport = useCallback(async () => {
-    if (!reportText) return;
+    if (!reportPreviewText) return;
 
     try {
-      await navigator.clipboard.writeText(reportText);
+      await navigator.clipboard.writeText(reportPreviewText);
       setActionMessage("Report copied.");
     } catch {
       setActionMessage("Clipboard is unavailable in this browser.");
     }
-  }, [reportText]);
+  }, [reportPreviewText]);
 
   const handleDownloadPdf = useCallback(async () => {
-    if (!reportText) return;
+    if (!reportPreviewText) return;
 
     try {
       const { jsPDF } = await import("jspdf");
@@ -235,17 +361,17 @@ export default function ResultsPageClient() {
 
       doc.setFont("helvetica", "normal");
       doc.setFontSize(11);
-      const lines = doc.splitTextToSize(reportText, 510);
+      const lines = doc.splitTextToSize(reportPreviewText, 510);
       doc.text(lines, 48, 82);
       doc.save(`respirasnap-report-${Date.now()}.pdf`);
       setActionMessage("PDF downloaded.");
     } catch {
       setActionMessage("Unable to generate PDF.");
     }
-  }, [reportText]);
+  }, [reportPreviewText]);
 
   const handleReadAloud = useCallback(async () => {
-    if (!reportText) return;
+    if (!reportPreviewText) return;
 
     if (readAloudBusy) {
       stopReadAloud();
@@ -263,7 +389,7 @@ export default function ResultsPageClient() {
           "content-type": "application/json"
         },
         body: JSON.stringify({
-          text: reportText.slice(0, 3200)
+          text: reportPreviewText.slice(0, 3200)
         })
       });
 
@@ -294,57 +420,57 @@ export default function ResultsPageClient() {
       if (demoMode) {
         demoScript.completeStep("readAloud");
       }
-      setActionMessage("Reading report aloud.");
+      setActionMessage("Reading structured report aloud.");
     } catch (error) {
       stopReadAloud();
       setReadAloudError(error instanceof Error ? error.message : "Unable to play report audio.");
     }
-  }, [demoMode, demoScript, readAloudBusy, reportText, stopReadAloud]);
+  }, [demoMode, demoScript, readAloudBusy, reportPreviewText, stopReadAloud]);
 
   useEffect(() => {
     if (!sessionAnalysis) return;
-    setReportText(sessionAnalysis.reportText);
-  }, [sessionAnalysis?.createdAt, sessionAnalysis?.reportText, sessionAnalysis]);
+    const next = sessionAnalysis.reportText || sessionAnalysis.reportLines?.join("\n") || "";
+    setReportText(next);
+  }, [sessionAnalysis?.createdAt, sessionAnalysis?.reportLines, sessionAnalysis?.reportText, sessionAnalysis]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    const audio = videoRef.current;
+    if (!audio) return;
 
     if (sessionVideo?.url) {
-      video.src = sessionVideo.url;
-      video.controls = true;
-      video.preload = "metadata";
-      video.playsInline = true;
+      audio.src = sessionVideo.url;
+      audio.controls = true;
+      audio.preload = "metadata";
       return;
     }
 
-    video.removeAttribute("src");
-    video.load();
+    audio.removeAttribute("src");
+    audio.load();
   }, [sessionVideo?.url]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    const audio = videoRef.current;
+    if (!audio) return;
 
     const updateCurrentTime = () => {
-      setVideoCurrentTime(Number.isFinite(video.currentTime) ? video.currentTime : 0);
+      setVideoCurrentTime(Number.isFinite(audio.currentTime) ? audio.currentTime : 0);
     };
 
     const updateDuration = () => {
-      const nextDuration = Number.isFinite(video.duration) ? video.duration : 0;
+      const nextDuration = Number.isFinite(audio.duration) ? audio.duration : 0;
       setVideoDuration(nextDuration);
     };
 
-    video.addEventListener("timeupdate", updateCurrentTime);
-    video.addEventListener("loadedmetadata", updateDuration);
-    video.addEventListener("durationchange", updateDuration);
-    video.addEventListener("seeking", updateCurrentTime);
+    audio.addEventListener("timeupdate", updateCurrentTime);
+    audio.addEventListener("loadedmetadata", updateDuration);
+    audio.addEventListener("durationchange", updateDuration);
+    audio.addEventListener("seeking", updateCurrentTime);
 
     return () => {
-      video.removeEventListener("timeupdate", updateCurrentTime);
-      video.removeEventListener("loadedmetadata", updateDuration);
-      video.removeEventListener("durationchange", updateDuration);
-      video.removeEventListener("seeking", updateCurrentTime);
+      audio.removeEventListener("timeupdate", updateCurrentTime);
+      audio.removeEventListener("loadedmetadata", updateDuration);
+      audio.removeEventListener("durationchange", updateDuration);
+      audio.removeEventListener("seeking", updateCurrentTime);
     };
   }, [sessionVideo?.url]);
 
@@ -357,7 +483,7 @@ export default function ResultsPageClient() {
     };
   }, [stopReadAloud]);
 
-  if (!sessionAnalysis) {
+  if (!sessionAnalysis || !pillars) {
     return (
       <main className={styles.main}>
         <AppShell
@@ -373,7 +499,7 @@ export default function ResultsPageClient() {
               No breathing snapshot results yet
             </SectionTitle>
             <HintText className={styles.emptyHint}>
-              Capture or upload a 15-second video on Record, then run Analyze to populate this page.
+              Capture or upload a 15-second audio clip on Record, then run Analyze to populate this page.
             </HintText>
             <div className={styles.emptyActions}>
               <GlowButton type="button" onClick={() => router.push("/record")}>
@@ -414,25 +540,28 @@ export default function ResultsPageClient() {
                 <Pill className={cx(styles.metaPill, styles[`confidence-${sessionAnalysis.confidenceLabel}`])}>
                   {formatConfidenceLabel(sessionAnalysis.confidenceLabel)}
                 </Pill>
+                {pillars.interruptions.quality === "Noisy" ? (
+                  <Pill className={cx(styles.metaPill, styles.noisyPill)}>Noisy capture (lower confidence)</Pill>
+                ) : null}
               </div>
-              <HintText className={styles.scoreHint}>
-                {sessionAnalysis.coachingTip || "Maintain a consistent pace for the next snapshot."}
-              </HintText>
+              <HintText className={styles.scoreHint}>{pillars.rhythm.subtext}</HintText>
             </GlassCard>
 
             <GlassCard className={styles.videoCard}>
               <div className={styles.videoTop}>
                 <SectionTitle as="h2" className={styles.videoTitle}>
-                  Video Replay
+                  Audio Replay
                 </SectionTitle>
-                <Pill className={styles.timePill}>{formatTime(videoCurrentTime)} / {formatTime(waveformDuration)}</Pill>
+                <Pill className={styles.timePill}>
+                  {formatTime(videoCurrentTime)} / {formatTime(waveformDuration)}
+                </Pill>
               </div>
 
               <div className={styles.videoFrame}>
-                <video ref={videoRef} className={styles.video} playsInline />
+                <audio ref={videoRef} className={styles.video} />
                 {!sessionVideo ? (
                   <div className={styles.videoFallback}>
-                    <p>Video not available after refresh. Waveform and report remain accessible.</p>
+                    <p>Audio unavailable after refresh. Metrics and report still visible.</p>
                   </div>
                 ) : null}
               </div>
@@ -444,7 +573,7 @@ export default function ResultsPageClient() {
                   onClick={() => {
                     seekVideo(sessionAnalysis.keyMomentTime, "key");
                     if (keyMomentMarker) {
-                      setActiveMarkerLabel(`${keyMomentMarker.label} • ${formatTime(keyMomentMarker.time)}`);
+                      setActiveMarkerLabel(`${keyMomentMarker.label} · ${formatTime(keyMomentMarker.time)}`);
                     }
                   }}
                 >
@@ -458,6 +587,56 @@ export default function ResultsPageClient() {
             </GlassCard>
           </motion.div>
 
+          <motion.div variants={fadeIn} className={styles.pillarsSection}>
+            <div className={styles.pillarsTop}>
+              <SectionTitle as="h2" className={styles.pillarsTitle}>
+                4 Pillars
+              </SectionTitle>
+              <Pill className={styles.metaPill}>Waveform-first metrics</Pill>
+            </div>
+
+            <motion.div className={styles.pillarGrid} variants={staggerChildren}>
+              {[
+                {
+                  id: "rhythm",
+                  label: pillars.rhythm.shortLabel,
+                  value: pillars.rhythm.value,
+                  subtext: pillars.rhythm.subtext,
+                  tone: pillars.rhythm.tone
+                },
+                {
+                  id: "exhale",
+                  label: pillars.exhaleRatio.shortLabel,
+                  value: pillars.exhaleRatio.value,
+                  subtext: pillars.exhaleRatio.subtext,
+                  tone: pillars.exhaleRatio.tone
+                },
+                {
+                  id: "interruptions",
+                  label: pillars.interruptions.shortLabel,
+                  value: pillars.interruptions.value,
+                  subtext: pillars.interruptions.subtext,
+                  tone: pillars.interruptions.tone
+                },
+                {
+                  id: "hold",
+                  label: pillars.holdDetected.shortLabel,
+                  value: pillars.holdDetected.value,
+                  subtext: pillars.holdDetected.subtext,
+                  tone: pillars.holdDetected.tone
+                }
+              ].map((pillar) => (
+                <motion.div key={pillar.id} variants={fadeUp}>
+                  <GlassCard className={cx(styles.pillarCard, pillarToneClass(pillar.tone))}>
+                    <p className={styles.pillarLabel}>{pillar.label}</p>
+                    <p className={styles.pillarValue}>{pillar.value}</p>
+                    <p className={styles.pillarSubtext}>{pillar.subtext}</p>
+                  </GlassCard>
+                </motion.div>
+              ))}
+            </motion.div>
+          </motion.div>
+
           <motion.div variants={fadeIn} className={styles.tileColumn}>
             <GlassCard className={styles.tile}>
               <button type="button" className={styles.tileHead} onClick={() => toggleTile("pattern")}>
@@ -469,15 +648,12 @@ export default function ResultsPageClient() {
 
               <AnimatePresence initial={false}>
                 {openTiles.pattern ? (
-                  <motion.div
-                    className={styles.tileBody}
-                    variants={fadeUp}
-                    initial="hidden"
-                    animate="visible"
-                    exit="hidden"
-                  >
-                    <p className={styles.bodyCopy}>{sessionAnalysis.patternSummary}</p>
-                    <HintText className={styles.bodyHint}>{sessionAnalysis.followUpPrompt}</HintText>
+                  <motion.div className={styles.tileBody} variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
+                    <ul className={styles.bulletList}>
+                      {patternBullets.map((bullet) => (
+                        <li key={bullet}>{bullet}</li>
+                      ))}
+                    </ul>
                   </motion.div>
                 ) : null}
               </AnimatePresence>
@@ -493,13 +669,7 @@ export default function ResultsPageClient() {
 
               <AnimatePresence initial={false}>
                 {openTiles.explainability ? (
-                  <motion.div
-                    className={styles.tileBody}
-                    variants={fadeUp}
-                    initial="hidden"
-                    animate="visible"
-                    exit="hidden"
-                  >
+                  <motion.div className={styles.tileBody} variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
                     <Waveform
                       className={styles.waveform}
                       envelope={sessionAnalysis.waveform.envelope}
@@ -514,26 +684,32 @@ export default function ResultsPageClient() {
                         if (demoMode) {
                           demoScript.completeStep("markers");
                         }
-                        seekVideo(marker.time, "marker", marker.label);
+                        const line = `${marker.label}${marker.detail ? ` · ${marker.detail}` : ""} · ${formatTime(marker.time)}`;
+                        setActiveMarkerLabel(line);
+                        seekVideo(marker.time, "marker", line);
                       }}
                     />
 
-                    <p className={styles.markerStatus}>
-                      {activeMarkerLabel || "Click a marker to seek video and inspect that event."}
+                    <p className={styles.markerTooltip}>
+                      {activeMarkerLabel || "Marker tooltip: click a marker for one-line detail."}
                     </p>
 
                     <div className={styles.legendRow}>
                       <span className={styles.legendItem}>
-                        <span className={cx(styles.legendDot, styles.legendWave)} />
-                        Waveform envelope
+                        <span className={cx(styles.legendDot, styles.legendRhythm)} />
+                        Rhythm markers (cycle boundaries)
                       </span>
                       <span className={styles.legendItem}>
-                        <span className={cx(styles.legendDot, styles.legendBaseline)} />
-                        Baseline overlay
+                        <span className={cx(styles.legendDot, styles.legendSegment)} />
+                        Inhale/Exhale segments
                       </span>
                       <span className={styles.legendItem}>
-                        <span className={cx(styles.legendDot, styles.legendEvent)} />
-                        Event marker
+                        <span className={cx(styles.legendDot, styles.legendInterrupt)} />
+                        Interruption markers
+                      </span>
+                      <span className={styles.legendItem}>
+                        <span className={cx(styles.legendDot, styles.legendHold)} />
+                        {pillars.holdDetected.enabled ? "Hold window marker" : "Hold marker (guide off)"}
                       </span>
                     </div>
 
@@ -555,7 +731,9 @@ export default function ResultsPageClient() {
                                 if (demoMode) {
                                   demoScript.completeStep("markers");
                                 }
-                                seekVideo(binTime, "marker", `Density ${index + 1}`);
+                                const line = `Density bin ${index + 1} · ${formatTime(binTime)}`;
+                                setActiveMarkerLabel(line);
+                                seekVideo(binTime, "marker", line);
                               }}
                               aria-label={`Seek density segment ${index + 1}`}
                             />
@@ -563,6 +741,49 @@ export default function ResultsPageClient() {
                         })}
                       </div>
                     </div>
+
+                    {isDevDebug && preprocessDebug ? (
+                      <div className={styles.debugWrap}>
+                        <button
+                          type="button"
+                          className={styles.debugToggle}
+                          onClick={() => setShowDebug((value) => !value)}
+                        >
+                          Debug {showDebug ? "On" : "Off"}
+                        </button>
+
+                        {showDebug && debugChart ? (
+                          <div className={styles.debugChartWrap}>
+                            <svg
+                              className={styles.debugChart}
+                              viewBox={`0 0 ${DEBUG_WIDTH} ${DEBUG_HEIGHT}`}
+                              preserveAspectRatio="none"
+                              aria-hidden
+                            >
+                              {debugChart.interruptions.map((segment, index) => {
+                                const startRatio = waveformDuration > 0 ? clamp(segment.tStart / waveformDuration, 0, 1) : 0;
+                                const endRatio = waveformDuration > 0 ? clamp(segment.tEnd / waveformDuration, startRatio, 1) : startRatio;
+                                const x = startRatio * DEBUG_WIDTH;
+                                const width = Math.max(1, (endRatio - startRatio) * DEBUG_WIDTH);
+                                return (
+                                  <rect
+                                    key={`dbg-interrupt-${index}`}
+                                    x={x}
+                                    y="0"
+                                    width={width}
+                                    height={DEBUG_HEIGHT}
+                                    className={styles.debugInterruption}
+                                  />
+                                );
+                              })}
+                              {debugChart.thresholdPath ? <path d={debugChart.thresholdPath} className={styles.debugThreshold} /> : null}
+                              {debugChart.rmsPath ? <path d={debugChart.rmsPath} className={styles.debugRms} /> : null}
+                            </svg>
+                            <p className={styles.debugCaption}>RMS smooth + threshold + detected interruption windows</p>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </motion.div>
                 ) : null}
               </AnimatePresence>
@@ -578,36 +799,28 @@ export default function ResultsPageClient() {
 
               <AnimatePresence initial={false}>
                 {openTiles.clinician ? (
-                  <motion.div
-                    className={styles.tileBody}
-                    variants={fadeUp}
-                    initial="hidden"
-                    animate="visible"
-                    exit="hidden"
-                  >
-                    <p className={styles.bodyCopy}>{sessionAnalysis.clinicianSummary}</p>
-
+                  <motion.div className={styles.tileBody} variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
                     <div className={styles.reportActions}>
                       <GlowButton type="button" onClick={handleGenerateReport} disabled={reportBusy}>
                         {reportBusy ? "Generating..." : "Generate Report"}
                       </GlowButton>
-                      <button type="button" className={styles.secondaryButton} onClick={handleCopyReport} disabled={!reportText}>
+                      <button type="button" className={styles.secondaryButton} onClick={handleCopyReport} disabled={!reportPreviewText}>
                         Copy
                       </button>
-                      <button type="button" className={styles.secondaryButton} onClick={handleDownloadPdf} disabled={!reportText}>
+                      <button type="button" className={styles.secondaryButton} onClick={handleDownloadPdf} disabled={!reportPreviewText}>
                         Download PDF
                       </button>
                       <button
                         type="button"
                         className={styles.secondaryButton}
                         onClick={handleReadAloud}
-                        disabled={!reportText}
+                        disabled={!reportPreviewText}
                       >
                         {readAloudBusy ? "Stop Audio" : "Read Aloud"}
                       </button>
                     </div>
 
-                    {reportText ? <pre className={styles.reportPreview}>{reportText}</pre> : null}
+                    {reportPreviewText ? <pre className={styles.reportPreview}>{reportPreviewText}</pre> : null}
                     {actionMessage ? <HintText className={styles.actionMessage}>{actionMessage}</HintText> : null}
                     {readAloudError ? <p className={styles.errorText}>{readAloudError}</p> : null}
                   </motion.div>

@@ -19,11 +19,24 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import styles from "./page.module.css";
 
 const CAPTURE_SECONDS = 15;
-const UPLOAD_ACCEPT = ".mp4,.mov,.webm,video/mp4,video/quicktime,video/webm";
-const BUNDLED_DEMO_SAMPLES = ["/samples/demo-breathing.webm", "/samples/demo-breathing.mp4", "/samples/demo-breathing.mov"];
+const UPLOAD_ACCEPT = ".mp3,.wav,.m4a,.aac,.webm,.ogg,audio/mpeg,audio/wav,audio/mp4,audio/webm,audio/ogg,audio/aac";
+const BUNDLED_DEMO_SAMPLES = [
+  "/samples/demo-breathing-audio.webm",
+  "/samples/demo-breathing-audio.mp3",
+  "/samples/demo-breathing-audio.wav"
+];
 
-const ACCEPTED_MIME_TYPES = new Set(["video/mp4", "video/quicktime", "video/webm"]);
-const ACCEPTED_EXTENSIONS = [".mp4", ".mov", ".webm"];
+const ACCEPTED_MIME_TYPES = new Set([
+  "audio/mpeg",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/mp4",
+  "audio/aac",
+  "audio/x-m4a",
+  "audio/webm",
+  "audio/ogg"
+]);
+const ACCEPTED_EXTENSIONS = [".mp3", ".wav", ".m4a", ".aac", ".webm", ".ogg"];
 
 type RecordPageClientProps = {
   mode: string;
@@ -123,17 +136,18 @@ function canRecordInBrowser() {
 
 function getSupportedRecorderMimeType() {
   const candidates = [
-    "video/webm;codecs=vp9,opus",
-    "video/webm;codecs=vp8,opus",
-    "video/webm",
-    "video/mp4"
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
+    "audio/mp4"
   ];
 
   if (typeof MediaRecorder === "undefined") return undefined;
   return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate));
 }
 
-function isAcceptableVideoFile(file: File) {
+function isAcceptableAudioFile(file: File) {
   const extension = ACCEPTED_EXTENSIONS.find((candidate) => file.name.toLowerCase().endsWith(candidate));
   return ACCEPTED_MIME_TYPES.has(file.type) || !!extension;
 }
@@ -318,7 +332,7 @@ function buildDemoAgentResults() {
     },
     coaching: {
       microIntervention: "Lengthen exhale by one count at each cycle to reduce late-transition drift.",
-      nextRecordingTip: "Keep chin level and maintain the same camera distance to stabilize signal quality."
+      nextRecordingTip: "Keep a steady mouth-to-microphone distance to stabilize signal quality."
     },
     followUp: {
       nextWeekPrompt: "Next week, repeat this capture at the same time and compare exhale smoothness.",
@@ -371,7 +385,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const [agentStates, setAgentStates] = useState<AgentState[]>(() => createInitialAgentState());
   const [isDemoSample, setIsDemoSample] = useState(false);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sampleFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -722,13 +736,13 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       }
 
       const recordedBlob = new Blob(recordingChunksRef.current, {
-        type: recorderMimeType || "video/webm"
+        type: recorderMimeType || "audio/webm"
       });
 
       recordingChunksRef.current = [];
 
       if (!recordedBlob.size) {
-        setErrorMessage("Recording finished, but no video data was captured. Please try again.");
+        setErrorMessage("Recording finished, but no audio data was captured. Please try again.");
         return;
       }
 
@@ -772,7 +786,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const startRecording = useCallback(async () => {
     if (!canRecordInBrowser()) {
       setPermissionState("unsupported");
-      setErrorMessage("This browser does not support in-browser video recording.");
+      setErrorMessage("This browser does not support in-browser audio recording.");
       return;
     }
 
@@ -788,16 +802,15 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     setVideoCurrentTime(0);
     setVideoDuration(0);
     setIsDemoSample(false);
-    setStatusMessage("Requesting camera and microphone access...");
+    setStatusMessage("Requesting microphone access...");
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "user",
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: true
+        audio: {
+          channelCount: { ideal: 1 },
+          echoCancellation: true,
+          noiseSuppression: true
+        }
       });
 
       const mimeType = getSupportedRecorderMimeType();
@@ -815,7 +828,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       };
 
       recorder.onerror = () => {
-        setErrorMessage("Recording failed. Please check camera/mic permissions and try again.");
+        setErrorMessage("Recording failed. Please check microphone permissions and try again.");
       };
 
       recorder.onstop = () => {
@@ -840,11 +853,11 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       }, CAPTURE_SECONDS * 1000);
     } catch (error) {
       setPermissionState("denied");
-      setStatusMessage("Camera/microphone access was blocked.");
+      setStatusMessage("Microphone access was blocked.");
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Unable to access camera and microphone. Update browser permissions and retry."
+          : "Unable to access microphone. Update browser permissions and retry."
       );
       stopMediaTracks();
     }
@@ -861,7 +874,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     setIsDemoSample(false);
     setInputMode("upload");
     setErrorMessage(null);
-    setStatusMessage("Select a video file to preview and analyze.");
+    setStatusMessage("Select an audio file to preview and analyze.");
     fileInputRef.current?.click();
   }, []);
 
@@ -872,8 +885,8 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
       if (!file) return;
 
-      if (!isAcceptableVideoFile(file)) {
-        setErrorMessage("Unsupported file format. Please choose mp4, mov, or webm.");
+      if (!isAcceptableAudioFile(file)) {
+        setErrorMessage("Unsupported file format. Please choose mp3, wav, m4a, aac, webm, or ogg.");
         return;
       }
 
@@ -892,7 +905,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       setVideoDuration(0);
       setInputMode("upload");
       setIsDemoSample(false);
-      setStatusMessage("Uploaded video ready for Backboard analysis.");
+      setStatusMessage("Uploaded audio ready for Backboard analysis.");
       setAnalysisMessage(null);
       setAnalysisResults(null);
       setAgentStates(createInitialAgentState());
@@ -938,7 +951,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     }
 
     if (!demoBlob) {
-      setStatusMessage("Bundled sample missing. Select a local sample video to continue demo mode.");
+      setStatusMessage("Bundled sample missing. Select a local sample audio file to continue demo mode.");
       sampleFileInputRef.current?.click();
       return;
     }
@@ -964,8 +977,8 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       event.target.value = "";
       if (!file) return;
 
-      if (!isAcceptableVideoFile(file)) {
-        setErrorMessage("Unsupported sample format. Please select mp4, mov, or webm.");
+      if (!isAcceptableAudioFile(file)) {
+        setErrorMessage("Unsupported sample format. Please select mp3, wav, m4a, aac, webm, or ogg.");
         return;
       }
 
@@ -1039,6 +1052,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
           energy: waveformData?.energy ?? fallbackWaveform.energy,
           duration: waveformDuration || fallbackWaveform.duration || CAPTURE_SECONDS
         },
+        preprocessing: waveformData?.preprocess ?? null,
         markers: eventMarkers.map((marker) => ({
           time: marker.time,
           label: marker.label
@@ -1073,6 +1087,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       setSessionAnalysis,
       waveformData?.energy,
       waveformData?.envelope,
+      waveformData?.preprocess,
       waveformDuration
     ]
   );
@@ -1336,57 +1351,56 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   }, [isRecording, startVoiceCoach, stopVoiceCoach, voiceCoachEnabled]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    const audio = videoRef.current;
+    if (!audio) return;
 
     if (isRecording && mediaStreamRef.current) {
-      video.srcObject = mediaStreamRef.current;
-      video.muted = true;
-      video.controls = false;
-      void video.play().catch(() => {
-        setErrorMessage("Live preview failed to autoplay. Tap the video to continue.");
+      audio.srcObject = mediaStreamRef.current;
+      audio.muted = true;
+      audio.controls = false;
+      void audio.play().catch(() => {
+        setErrorMessage("Live audio monitor failed to autoplay. Tap play to continue.");
       });
       return;
     }
 
-    video.srcObject = null;
+    audio.srcObject = null;
 
     if (sessionVideo?.url) {
-      video.src = sessionVideo.url;
-      video.muted = false;
-      video.controls = true;
-      video.preload = "metadata";
-      video.playsInline = true;
+      audio.src = sessionVideo.url;
+      audio.muted = false;
+      audio.controls = true;
+      audio.preload = "metadata";
       return;
     }
 
-    video.removeAttribute("src");
-    video.load();
+    audio.removeAttribute("src");
+    audio.load();
   }, [isRecording, sessionVideo?.url]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    const audio = videoRef.current;
+    if (!audio) return;
 
     const updateTime = () => {
-      setVideoCurrentTime(Number.isFinite(video.currentTime) ? video.currentTime : 0);
+      setVideoCurrentTime(Number.isFinite(audio.currentTime) ? audio.currentTime : 0);
     };
 
     const updateMeta = () => {
-      const nextDuration = Number.isFinite(video.duration) ? video.duration : 0;
+      const nextDuration = Number.isFinite(audio.duration) ? audio.duration : 0;
       setVideoDuration(nextDuration);
     };
 
-    video.addEventListener("timeupdate", updateTime);
-    video.addEventListener("loadedmetadata", updateMeta);
-    video.addEventListener("durationchange", updateMeta);
-    video.addEventListener("seeking", updateTime);
+    audio.addEventListener("timeupdate", updateTime);
+    audio.addEventListener("loadedmetadata", updateMeta);
+    audio.addEventListener("durationchange", updateMeta);
+    audio.addEventListener("seeking", updateTime);
 
     return () => {
-      video.removeEventListener("timeupdate", updateTime);
-      video.removeEventListener("loadedmetadata", updateMeta);
-      video.removeEventListener("durationchange", updateMeta);
-      video.removeEventListener("seeking", updateTime);
+      audio.removeEventListener("timeupdate", updateTime);
+      audio.removeEventListener("loadedmetadata", updateMeta);
+      audio.removeEventListener("durationchange", updateMeta);
+      audio.removeEventListener("seeking", updateTime);
     };
   }, [sessionVideo?.url, isRecording]);
 
@@ -1406,7 +1420,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       .catch(() => {
         if (cancelled) return;
         setWaveformData(null);
-        setWaveformError("Unable to decode audio from this video. Waveform unavailable.");
+        setWaveformError("Unable to decode this audio file. Waveform unavailable.");
       })
       .finally(() => {
         if (cancelled) return;
@@ -1437,19 +1451,19 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   }, [clearRecordingTimers, stopLiveWaveform, stopMediaTracks, stopVoiceCoach]);
 
   const permissionLabel = useMemo(() => {
-    if (permissionState === "granted") return "Permissions: Granted";
-    if (permissionState === "denied") return "Permissions: Blocked";
-    if (permissionState === "unsupported") return "Permissions: Unsupported";
-    return "Permissions: Pending";
+    if (permissionState === "granted") return "Microphone: Granted";
+    if (permissionState === "denied") return "Microphone: Blocked";
+    if (permissionState === "unsupported") return "Microphone: Unsupported";
+    return "Microphone: Pending";
   }, [permissionState]);
 
   const sourceLabel = useMemo(() => {
     if (sessionVideo?.source === "upload") {
-      return sessionVideo.fileName ? `Source: ${sessionVideo.fileName}` : "Source: Uploaded video";
+      return sessionVideo.fileName ? `Source: ${sessionVideo.fileName}` : "Source: Uploaded audio";
     }
 
     if (sessionVideo?.source === "record") {
-      return "Source: Live recording";
+      return "Source: Live audio recording";
     }
 
     return "Source: Not selected";
@@ -1483,7 +1497,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
               <ol className={styles.instructionList}>
                 <li>Choose input: Record or Upload</li>
-                <li>Preview your 15s breathing clip</li>
+                <li>Preview your 15s breathing audio clip</li>
                 <li>Run Analyze to start Backboard agents</li>
               </ol>
 
@@ -1553,19 +1567,19 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                   >
                     <div className={styles.chooseGrid}>
                       <button type="button" className={styles.chooseCard} onClick={chooseRecord}>
-                        <strong>Record</strong>
-                        <span>Use camera + mic for an exact 15s capture.</span>
+                        <strong>Record Audio</strong>
+                        <span>Use your microphone for an exact 15s capture.</span>
                       </button>
 
                       <button type="button" className={styles.chooseCard} onClick={triggerUploadPicker}>
-                        <strong>Upload</strong>
-                        <span>Bring an existing mp4, mov, or webm file.</span>
+                        <strong>Upload Audio</strong>
+                        <span>Bring an existing mp3, wav, m4a, aac, webm, or ogg file.</span>
                       </button>
 
                       {demoMode ? (
                         <button type="button" className={styles.chooseCard} onClick={() => void loadDemoSample()}>
                           <strong>Load Sample</strong>
-                          <span>Judge-safe demo video with guided pipeline outputs.</span>
+                          <span>Judge-safe demo audio with guided pipeline outputs.</span>
                         </button>
                       ) : null}
                     </div>
@@ -1580,11 +1594,11 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                     exit="exit"
                   >
                     <div className={styles.previewFrame}>
-                      <video ref={videoRef} className={styles.previewVideo} playsInline />
+                      <audio ref={videoRef} className={styles.previewAudio} />
 
                       {!sessionVideo && !isRecording ? (
                         <div className={styles.emptyState}>
-                          <p>Start recording or upload a video to preview here.</p>
+                          <p>Start recording or upload audio to preview here.</p>
                         </div>
                       ) : null}
 

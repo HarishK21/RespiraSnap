@@ -12,6 +12,8 @@ type WaveformMarker = {
   id: string;
   time: number;
   label: string;
+  type?: "event" | "irregular" | "rhythm" | "segment" | "interruption" | "hold";
+  detail?: string;
 };
 
 type WaveformProps = {
@@ -183,9 +185,11 @@ export default function Waveform({
                     onScrub?.(marker.time);
                   }}
                 >
-                  <span className={styles.markerLabel}>{marker.label}</span>
-                  <span className={styles.markerDot} />
-                  <span className={styles.markerStem} />
+                  <span className={cx(styles.markerLabel, marker.type && styles[`markerLabel-${marker.type}`])}>
+                    {marker.label}
+                  </span>
+                  <span className={cx(styles.markerDot, marker.type && styles[`markerDot-${marker.type}`])} />
+                  <span className={cx(styles.markerStem, marker.type && styles[`markerStem-${marker.type}`])} />
                 </button>
               );
             })

@@ -150,7 +150,7 @@ export default function HistoryPageClient() {
   const [syncError, setSyncError] = useState("");
   const [backboardItems, setBackboardItems] = useState<TimelineItem[]>([]);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLAudioElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
   const modalObjectUrlRef = useRef<string | null>(null);
@@ -372,7 +372,7 @@ export default function HistoryPageClient() {
       try {
         const blob = await readArchivedVideoBlob(item.createdAt);
         if (!blob) {
-          setVideoError("Archived video unavailable for this snapshot.");
+          setVideoError("Archived audio unavailable for this snapshot.");
           setVideoUrl("");
           return;
         }
@@ -381,7 +381,7 @@ export default function HistoryPageClient() {
         modalObjectUrlRef.current = url;
         setVideoUrl(url);
       } catch {
-        setVideoError("Unable to load archived replay.");
+        setVideoError("Unable to load archived audio replay.");
         setVideoUrl("");
       } finally {
         setVideoLoading(false);
@@ -442,27 +442,27 @@ export default function HistoryPageClient() {
   }, [readAloudBusy, selectedItem, stopReadAloud]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    const audio = videoRef.current;
+    if (!audio) return;
 
     const syncTime = () => {
-      setVideoCurrentTime(Number.isFinite(video.currentTime) ? video.currentTime : 0);
+      setVideoCurrentTime(Number.isFinite(audio.currentTime) ? audio.currentTime : 0);
     };
 
     const syncDuration = () => {
-      setVideoDuration(Number.isFinite(video.duration) ? video.duration : 0);
+      setVideoDuration(Number.isFinite(audio.duration) ? audio.duration : 0);
     };
 
-    video.addEventListener("timeupdate", syncTime);
-    video.addEventListener("loadedmetadata", syncDuration);
-    video.addEventListener("durationchange", syncDuration);
-    video.addEventListener("seeking", syncTime);
+    audio.addEventListener("timeupdate", syncTime);
+    audio.addEventListener("loadedmetadata", syncDuration);
+    audio.addEventListener("durationchange", syncDuration);
+    audio.addEventListener("seeking", syncTime);
 
     return () => {
-      video.removeEventListener("timeupdate", syncTime);
-      video.removeEventListener("loadedmetadata", syncDuration);
-      video.removeEventListener("durationchange", syncDuration);
-      video.removeEventListener("seeking", syncTime);
+      audio.removeEventListener("timeupdate", syncTime);
+      audio.removeEventListener("loadedmetadata", syncDuration);
+      audio.removeEventListener("durationchange", syncDuration);
+      audio.removeEventListener("seeking", syncTime);
     };
   }, [selectedItem?.id]);
 
@@ -634,11 +634,11 @@ export default function HistoryPageClient() {
                 <div className={styles.modalVideoWrap}>
                   {videoLoading ? <div className={styles.modalFallback}>Loading replay...</div> : null}
                   {!videoLoading && videoUrl ? (
-                    <video ref={videoRef} className={styles.modalVideo} src={videoUrl} controls playsInline />
+                    <audio ref={videoRef} className={styles.modalVideo} src={videoUrl} controls />
                   ) : null}
                   {!videoLoading && !videoUrl ? (
                     <div className={styles.modalFallback}>
-                      <p>{videoError || "Video replay unavailable for this snapshot."}</p>
+                      <p>{videoError || "Audio replay unavailable for this snapshot."}</p>
                     </div>
                   ) : null}
                 </div>
