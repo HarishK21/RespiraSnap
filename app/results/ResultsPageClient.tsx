@@ -3,7 +3,7 @@
 import Waveform, { type WaveformMarker } from "@/components/audio/Waveform";
 import AppShell from "@/components/layout/AppShell";
 import { fadeIn, fadeUp, hoverGlow, staggerChildren } from "@/components/motion/presets";
-import { Divider, GlassCard, GlowButton, HintText, Pill, SectionTitle } from "@/components/ui/primitives";
+import { GlassCard, GlowButton, HintText, Pill, SectionTitle } from "@/components/ui/primitives";
 import { useDemoMode } from "@/hooks/useDemoMode";
 import { useDemoScript } from "@/hooks/useDemoScript";
 import { useReducedMotionPref } from "@/hooks/useReducedMotionPref";
@@ -15,7 +15,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./page.module.css";
 
-type TileKey = "pattern" | "explainability" | "clinician";
+type TileKey = "explainability" | "clinician";
 
 const TREND_WIDTH = 360;
 const TREND_HEIGHT = 112;
@@ -42,6 +42,13 @@ function formatConfidenceLabel(value: "low" | "med" | "high") {
   if (value === "high") return "High confidence";
   if (value === "med") return "Medium confidence";
   return "Low confidence";
+}
+
+function parseDeltaValue(value: string) {
+  const match = value.match(/[-+]?\d+/);
+  if (!match) return 0;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function fallbackPillars(score: number, markerCount: number): SessionPillars {
@@ -103,14 +110,6 @@ function pillarToneClass(tone: SessionPillars["rhythm"]["tone"]) {
   return styles.pillarToneNeutral;
 }
 
-function buildFallbackPatternBullets(pillars: SessionPillars) {
-  return [
-    `Rhythm: ${pillars.rhythm.value}`,
-    `Exhale ratio: ${pillars.exhaleRatio.value}`,
-    `Interruptions: ${pillars.interruptions.value} (quality: ${pillars.interruptions.quality.toLowerCase()})`
-  ];
-}
-
 function buildDebugLine(values: number[], maxValue: number) {
   if (values.length === 0) return "";
 
@@ -138,7 +137,6 @@ export default function ResultsPageClient() {
   const [activeMarkerLabel, setActiveMarkerLabel] = useState("");
 
   const [openTiles, setOpenTiles] = useState<Record<TileKey, boolean>>({
-    pattern: true,
     explainability: true,
     clinician: true
   });
@@ -165,6 +163,31 @@ export default function ResultsPageClient() {
     if (!sessionAnalysis) return null;
     return sessionAnalysis.pillars ?? fallbackPillars(sessionAnalysis.score, sessionAnalysis.markers.length);
   }, [sessionAnalysis]);
+
+  const trend = useMemo(() => {
+    if (!sessionAnalysis) return null;
+
+    const fallbackDelta = parseDeltaValue(sessionAnalysis.deltaLabel);
+    const fallbackComparedCount = Math.min(4, Math.max(0, analysisHistory.length));
+    const fallbackLabel =
+      fallbackComparedCount < 3
+        ? "Baseline building"
+        : fallbackDelta >= 4
+          ? "Improving"
+          : fallbackDelta <= -4
+            ? "Worsening"
+            : "Stable";
+
+    const source = sessionAnalysis.trend;
+    return {
+      label: source?.label ?? fallbackLabel,
+      deltaValue: typeof source?.deltaValue === "number" ? source.deltaValue : fallbackDelta,
+      confidence: source?.confidence ?? sessionAnalysis.confidenceLabel,
+      comparedToLabel:
+        source?.comparedToLabel ?? (fallbackComparedCount ? `Compared to your last ${fallbackComparedCount} sessions` : ""),
+      reason: source?.reason || source?.pillarDeltaSummary || ""
+    };
+  }, [analysisHistory.length, sessionAnalysis]);
 
   const isDevDebug = process.env.NODE_ENV !== "production";
   const preprocessDebug = sessionAnalysis?.preprocessDebug ?? null;
@@ -236,12 +259,6 @@ export default function ResultsPageClient() {
 
     return `M ${top[0]} L ${top.slice(1).join(" ")} L ${bottom.join(" ")} Z`;
   }, [trendEntries]);
-
-  const patternBullets = useMemo(() => {
-    if (!sessionAnalysis || !pillars) return [] as string[];
-    return (sessionAnalysis.patternBullets?.length ? sessionAnalysis.patternBullets : buildFallbackPatternBullets(pillars))
-      .slice(0, 3);
-  }, [pillars, sessionAnalysis]);
 
   const reportPreviewText = useMemo(() => {
     if (reportText.trim()) return reportText;
@@ -535,8 +552,24 @@ export default function ResultsPageClient() {
             <GlassCard className={styles.scoreCard}>
               <Pill className={styles.scorePill}>Breathing Snapshot Score (0-100)</Pill>
               <p className={styles.scoreValue}>{sessionAnalysis.score}</p>
+              {trend ? (
+                <div className={styles.trendRow}>
+                  <span className={styles.trendLabel}>Trend vs baseline</span>
+                  <div className={styles.trendValueRow}>
+                    <Pill className={cx(styles.trendPill, styles[`trend-${trend.label.toLowerCase().replace(/\s+/g, "-")}`])}>
+                      {trend.label}
+                    </Pill>
+                    <span className={styles.trendDelta}>
+                      {trend.deltaValue >= 0 ? "+" : ""}
+                      {trend.deltaValue} vs baseline
+                    </span>
+                    <Pill className={cx(styles.metaPill, styles[`confidence-${trend.confidence}`])}>
+                      {trend.confidence.toUpperCase()}
+                    </Pill>
+                  </div>
+                </div>
+              ) : null}
               <div className={styles.scoreMeta}>
-                <Pill className={styles.metaPill}>{sessionAnalysis.deltaLabel}</Pill>
                 <Pill className={cx(styles.metaPill, styles[`confidence-${sessionAnalysis.confidenceLabel}`])}>
                   {formatConfidenceLabel(sessionAnalysis.confidenceLabel)}
                 </Pill>
@@ -544,6 +577,8 @@ export default function ResultsPageClient() {
                   <Pill className={cx(styles.metaPill, styles.noisyPill)}>Noisy capture (lower confidence)</Pill>
                 ) : null}
               </div>
+              {trend?.comparedToLabel ? <HintText className={styles.trendHint}>{trend.comparedToLabel}</HintText> : null}
+              {trend?.reason ? <HintText className={styles.trendReason}>{trend.reason}</HintText> : null}
               <HintText className={styles.scoreHint}>{pillars.rhythm.subtext}</HintText>
             </GlassCard>
 
@@ -588,13 +623,6 @@ export default function ResultsPageClient() {
           </motion.div>
 
           <motion.div variants={fadeIn} className={styles.pillarsSection}>
-            <div className={styles.pillarsTop}>
-              <SectionTitle as="h2" className={styles.pillarsTitle}>
-                4 Pillars
-              </SectionTitle>
-              <Pill className={styles.metaPill}>Waveform-first metrics</Pill>
-            </div>
-
             <motion.div className={styles.pillarGrid} variants={staggerChildren}>
               {[
                 {
@@ -638,27 +666,6 @@ export default function ResultsPageClient() {
           </motion.div>
 
           <motion.div variants={fadeIn} className={styles.tileColumn}>
-            <GlassCard className={styles.tile}>
-              <button type="button" className={styles.tileHead} onClick={() => toggleTile("pattern")}>
-                <SectionTitle as="h3" className={styles.tileTitle}>
-                  Pattern Summary
-                </SectionTitle>
-                <span className={styles.tileToggle}>{openTiles.pattern ? "Collapse" : "Expand"}</span>
-              </button>
-
-              <AnimatePresence initial={false}>
-                {openTiles.pattern ? (
-                  <motion.div className={styles.tileBody} variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
-                    <ul className={styles.bulletList}>
-                      {patternBullets.map((bullet) => (
-                        <li key={bullet}>{bullet}</li>
-                      ))}
-                    </ul>
-                  </motion.div>
-                ) : null}
-              </AnimatePresence>
-            </GlassCard>
-
             <GlassCard className={styles.tile}>
               <button type="button" className={styles.tileHead} onClick={() => toggleTile("explainability")}>
                 <SectionTitle as="h3" className={styles.tileTitle}>
@@ -711,35 +718,6 @@ export default function ResultsPageClient() {
                         <span className={cx(styles.legendDot, styles.legendHold)} />
                         {pillars.holdDetected.enabled ? "Hold window marker" : "Hold marker (guide off)"}
                       </span>
-                    </div>
-
-                    <Divider className={styles.tileDivider} />
-
-                    <div className={styles.densityWrap}>
-                      <p className={styles.densityLabel}>Event density</p>
-                      <div className={styles.densityBars}>
-                        {sessionAnalysis.eventDensity.map((value, index) => {
-                          const totalBins = Math.max(sessionAnalysis.eventDensity.length, 1);
-                          const binTime = (index / totalBins) * waveformDuration;
-                          return (
-                            <button
-                              key={`density-${index}`}
-                              type="button"
-                              className={styles.densityBar}
-                              style={{ height: `${Math.max(14, value * 100)}%` }}
-                              onClick={() => {
-                                if (demoMode) {
-                                  demoScript.completeStep("markers");
-                                }
-                                const line = `Density bin ${index + 1} · ${formatTime(binTime)}`;
-                                setActiveMarkerLabel(line);
-                                seekVideo(binTime, "marker", line);
-                              }}
-                              aria-label={`Seek density segment ${index + 1}`}
-                            />
-                          );
-                        })}
-                      </div>
                     </div>
 
                     {isDevDebug && preprocessDebug ? (

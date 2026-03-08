@@ -2,7 +2,8 @@
 
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import Link from "next/link";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { fadeUp, hoverGlow, pageTransition } from "@/components/motion/presets";
 import { Divider, GlassCard, HintText, IconButton, Pill, Toast } from "@/components/ui/primitives";
 import { useAuthUser } from "@/hooks/useAuthUser";
@@ -26,6 +27,10 @@ type AppShellProps = {
 
 function cx(...classNames: Array<string | undefined | null | false>) {
   return classNames.filter(Boolean).join(" ");
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 type ToggleProps = {
@@ -61,17 +66,28 @@ export default function AppShell({
   passThrough = false
 }: AppShellProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+  const [settingsPosition, setSettingsPosition] = useState({
+    top: 0,
+    left: 0,
+    width: 300
+  });
   const [resetOpen, setResetOpen] = useState(false);
   const [resetBusy, setResetBusy] = useState(false);
   const [resetError, setResetError] = useState("");
   const [toastMessage, setToastMessage] = useState("");
   const [toastVisible, setToastVisible] = useState(false);
+  const settingsTriggerRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { user, isLoading, logout } = useAuthUser();
   const { deviceId, assistantId } = useBackboardIdentity();
   const { clearAllSessionAnalysis } = useSessionAnalysis();
   const { clearSessionVideo } = useSessionVideo();
   const allowResetAllDemo = process.env.NEXT_PUBLIC_DEMO_RESET_ALL === "true";
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -93,6 +109,48 @@ export default function AppShell({
       setToastVisible(false);
     }, 1700);
   };
+
+  const syncSettingsPosition = useCallback(() => {
+    if (typeof window === "undefined") return;
+
+    const trigger = settingsTriggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const gutter = 12;
+    const maxWidth = Math.max(180, window.innerWidth - gutter * 2);
+    const width = Math.min(300, window.innerWidth * 0.78, maxWidth);
+    const left = clamp(rect.right - width, gutter, Math.max(gutter, window.innerWidth - width - gutter));
+    const top = clamp(rect.bottom + 8, gutter, Math.max(gutter, window.innerHeight - gutter));
+
+    setSettingsPosition({ top, left, width });
+  }, []);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+
+    syncSettingsPosition();
+
+    const handleViewportChange = () => {
+      syncSettingsPosition();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSettingsOpen(false);
+      }
+    };
+
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [settingsOpen, syncSettingsPosition]);
 
   const handleReducedMotionToggle = () => {
     const nextState = !reducedMotion;
@@ -183,12 +241,20 @@ export default function AppShell({
               {isLoading ? "Account: Loading" : user ? `Account: ${user.name}` : "Account: Guest"}
             </Pill>
 
-            <motion.div {...hoverGlow} transition={{ duration: 0.2 }}>
+            <motion.div {...hoverGlow} transition={{ duration: 0.2 }} ref={settingsTriggerRef}>
               <IconButton
                 className={styles.settingsButton}
                 aria-expanded={settingsOpen}
                 aria-label="Open display controls"
-                onClick={() => setSettingsOpen((open) => !open)}
+                onClick={() =>
+                  setSettingsOpen((open) => {
+                    const nextOpen = !open;
+                    if (nextOpen) {
+                      requestAnimationFrame(() => syncSettingsPosition());
+                    }
+                    return nextOpen;
+                  })
+                }
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
                   <path
@@ -200,74 +266,108 @@ export default function AppShell({
                 </svg>
               </IconButton>
             </motion.div>
-
-            <AnimatePresence>
-              {settingsOpen ? (
-                <motion.div
-                  className={styles.settingsPanelWrap}
-                  variants={fadeUp}
-                  initial="hidden"
-                  animate="visible"
-                  exit="hidden"
-                >
-                  <GlassCard className={styles.settingsPanel}>
-                    <ToggleRow
-                      label="Reduced Motion"
-                      hint="Match system or override"
-                      active={reducedMotion}
-                      onToggle={handleReducedMotionToggle}
-                    />
-                    <Divider className={styles.panelDivider} />
-                    <ToggleRow
-                      label="Demo Mode"
-                      hint="Preview without committing"
-                      active={demoMode}
-                      onToggle={handleDemoModeToggle}
-                    />
-                    {user ? (
-                      <>
-                        <Divider className={styles.panelDivider} />
-                        <button type="button" className={styles.resetButton} onClick={() => setResetOpen(true)}>
-                          Reset Data
-                        </button>
-                        <HintText className={styles.sourceHint}>Clear snapshots, baseline memory, and local cache.</HintText>
-                      </>
-                    ) : null}
-                    <Divider className={styles.panelDivider} />
-                    {isLoading ? (
-                      <HintText className={styles.sourceHint}>Checking account status...</HintText>
-                    ) : user ? (
-                      <div className={styles.authPanel}>
-                        <HintText className={styles.sourceHint}>Signed in as {user.email}</HintText>
-                        <button type="button" className={styles.authButton} onClick={handleLogout}>
-                          Log out
-                        </button>
-                      </div>
-                    ) : (
-                      <div className={styles.authPanel}>
-                        <HintText className={styles.sourceHint}>Sign in to sync snapshots to MongoDB.</HintText>
-                        <div className={styles.authLinks}>
-                          <Link href="/login" className={styles.authButton}>
-                            Login
-                          </Link>
-                          <Link href="/signup" className={styles.authButton}>
-                            Sign up
-                          </Link>
-                        </div>
-                      </div>
-                    )}
-                    <HintText className={styles.sourceHint}>
-                      Reduced motion source: {reducedMotionSource}
-                    </HintText>
-                  </GlassCard>
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
           </div>
         </header>
 
         <div className={cx(styles.content, contentClassName)}>{children}</div>
       </motion.div>
+
+      {isMounted
+        ? createPortal(
+            <AnimatePresence>
+              {settingsOpen ? (
+                <>
+                  <motion.button
+                    type="button"
+                    aria-label="Close display controls"
+                    className={styles.settingsOverlay}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={() => setSettingsOpen(false)}
+                  />
+                  <motion.div
+                    className={styles.settingsPanelWrap}
+                    style={{
+                      top: settingsPosition.top,
+                      left: settingsPosition.left,
+                      width: settingsPosition.width
+                    }}
+                    variants={fadeUp}
+                    initial="hidden"
+                    animate="visible"
+                    exit="hidden"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <GlassCard className={styles.settingsPanel}>
+                      <ToggleRow
+                        label="Reduced Motion"
+                        hint="Match system or override"
+                        active={reducedMotion}
+                        onToggle={handleReducedMotionToggle}
+                      />
+                      <Divider className={styles.panelDivider} />
+                      <ToggleRow
+                        label="Demo Mode"
+                        hint="Preview without committing"
+                        active={demoMode}
+                        onToggle={handleDemoModeToggle}
+                      />
+                      {user ? (
+                        <>
+                          <Divider className={styles.panelDivider} />
+                          <button
+                            type="button"
+                            className={styles.resetButton}
+                            onClick={() => {
+                              setSettingsOpen(false);
+                              setResetOpen(true);
+                            }}
+                          >
+                            Reset Demo Data
+                          </button>
+                          <HintText className={styles.sourceHint}>Clear snapshots, baseline memory, and local cache.</HintText>
+                        </>
+                      ) : null}
+                      <Divider className={styles.panelDivider} />
+                      {isLoading ? (
+                        <HintText className={styles.sourceHint}>Checking account status...</HintText>
+                      ) : user ? (
+                        <div className={styles.authPanel}>
+                          <HintText className={styles.sourceHint}>Signed in as {user.email}</HintText>
+                          <div className={styles.authLinks}>
+                            <Link href="/history" className={styles.authButton} onClick={() => setSettingsOpen(false)}>
+                              History
+                            </Link>
+                            <button type="button" className={styles.authButton} onClick={handleLogout}>
+                              Log out
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={styles.authPanel}>
+                          <HintText className={styles.sourceHint}>Sign in to sync snapshots to MongoDB.</HintText>
+                          <div className={styles.authLinks}>
+                            <Link href="/login" className={styles.authButton} onClick={() => setSettingsOpen(false)}>
+                              Login
+                            </Link>
+                            <Link href="/signup" className={styles.authButton} onClick={() => setSettingsOpen(false)}>
+                              Sign up
+                            </Link>
+                          </div>
+                        </div>
+                      )}
+                      <HintText className={styles.sourceHint}>
+                        Reduced motion source: {reducedMotionSource}
+                      </HintText>
+                    </GlassCard>
+                  </motion.div>
+                </>
+              ) : null}
+            </AnimatePresence>,
+            document.body
+          )
+        : null}
 
       <AnimatePresence>
         {resetOpen ? (

@@ -28,6 +28,12 @@ export type AnalysisHistoryEntry = {
   score: number;
   envelope: number[];
   duration: number;
+  rhythmLabel?: "Stable" | "Slightly Variable" | "Variable";
+  exhaleRatio?: number | null;
+  interruptions?: number;
+  holdDetected?: boolean | null;
+  confidenceLabel?: "low" | "med" | "high";
+  qualityFlag?: "Good" | "Fair" | "Poor" | "Noisy";
 };
 
 export type PillarTone = "good" | "warning" | "poor" | "neutral";
@@ -99,11 +105,23 @@ export type SessionPillars = {
   holdDetected: HoldDetectedPillar;
 };
 
+export type TrendVsBaseline = {
+  label: "Improving" | "Stable" | "Worsening" | "Baseline building";
+  deltaValue: number;
+  deltaLabel: string;
+  confidence: "low" | "med" | "high";
+  comparedCount: number;
+  comparedToLabel: string;
+  reason: string;
+  pillarDeltaSummary: string;
+};
+
 export type SessionAnalysis = {
   createdAt: string;
   mode: string;
   score: number;
   deltaLabel: string;
+  trend: TrendVsBaseline;
   confidenceLabel: "low" | "med" | "high";
   patternSummary: string;
   patternBullets: string[];
@@ -145,6 +163,7 @@ type BuildBundleInput = {
   };
   markers: Array<{ time: number; label: string }>;
   history: AnalysisHistoryEntry[];
+  sessions?: SessionAnalysis[];
   preprocessing?: BreathPreprocessSummary | null;
   createdAt?: string;
 };
@@ -908,6 +927,178 @@ function nextWeekLabel(createdAtIso: string) {
   });
 }
 
+function rhythmToScore(value: RhythmPillar["value"]) {
+  if (value === "Stable") return 3;
+  if (value === "Slightly Variable") return 2;
+  return 1;
+}
+
+function classifyTrend(totalSessions: number, delta: number): TrendVsBaseline["label"] {
+  if (totalSessions < 3) return "Baseline building";
+  if (delta >= 4) return "Improving";
+  if (delta <= -4) return "Worsening";
+  return "Stable";
+}
+
+function medianScore(values: number[]) {
+  if (!values.length) return 0;
+  return median(values);
+}
+
+function buildFallbackPillarDeltaSummary(
+  currentPillars: SessionPillars,
+  priorSessions: SessionAnalysis[]
+) {
+  if (!priorSessions.length) return "";
+
+  const items: Array<{ priority: number; label: string }> = [];
+
+  const rhythmBaseline = mean(priorSessions.map((session) => rhythmToScore(session.pillars.rhythm.value)));
+  const rhythmNow = rhythmToScore(currentPillars.rhythm.value);
+  if (rhythmNow >= rhythmBaseline + 0.25) {
+    items.push({ priority: 1, label: "Rhythm ↑" });
+  } else if (rhythmNow <= rhythmBaseline - 0.25) {
+    items.push({ priority: 1, label: "Rhythm ↓" });
+  }
+
+  const previousInterruptions = priorSessions
+    .map((session) => session.pillars.interruptions.count)
+    .filter((value) => Number.isFinite(value));
+  if (previousInterruptions.length) {
+    const interruptionBaseline = medianScore(previousInterruptions);
+    const interruptionDelta = currentPillars.interruptions.count - interruptionBaseline;
+    if (interruptionDelta <= -1) {
+      items.push({ priority: 2, label: "Interruptions ↓" });
+    } else if (interruptionDelta >= 1) {
+      items.push({ priority: 2, label: "Interruptions ↑" });
+    }
+  }
+
+  const previousRatios = priorSessions
+    .map((session) => session.pillars.exhaleRatio.ratio)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (typeof currentPillars.exhaleRatio.ratio === "number" && previousRatios.length) {
+    const baselineRatio = medianScore(previousRatios);
+    const currentDistance = Math.abs(currentPillars.exhaleRatio.ratio - 1.4);
+    const baselineDistance = Math.abs(baselineRatio - 1.4);
+
+    if (currentDistance <= baselineDistance - 0.08) {
+      items.push({ priority: 3, label: "Exhale ratio ↑" });
+    } else if (currentDistance >= baselineDistance + 0.08) {
+      items.push({ priority: 3, label: "Exhale ratio ↓" });
+    }
+  }
+
+  const previousHolds = priorSessions
+    .map((session) => session.pillars.holdDetected.detected)
+    .filter((value): value is boolean => typeof value === "boolean");
+  if (typeof currentPillars.holdDetected.detected === "boolean" && previousHolds.length) {
+    const holdBaselineRate =
+      previousHolds.reduce((sum, value) => sum + (value ? 1 : 0), 0) / previousHolds.length;
+    if (currentPillars.holdDetected.detected && holdBaselineRate < 0.5) {
+      items.push({ priority: 4, label: "Hold ↑" });
+    } else if (!currentPillars.holdDetected.detected && holdBaselineRate > 0.5) {
+      items.push({ priority: 4, label: "Hold ↓" });
+    }
+  }
+
+  return items
+    .sort((left, right) => left.priority - right.priority)
+    .slice(0, 2)
+    .map((item) => item.label)
+    .join(", ");
+}
+
+function buildTrendVsBaseline(input: {
+  score: number;
+  baseline: Record<string, unknown>;
+  currentPillars: SessionPillars;
+  priorSessions: SessionAnalysis[];
+  priorHistory: AnalysisHistoryEntry[];
+  confidenceLabel: "low" | "med" | "high";
+}) {
+  const sortedSessions = [...input.priorSessions].sort(
+    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  );
+  const sortedHistory = [...input.priorHistory].sort(
+    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  );
+
+  const scoreSource = sortedSessions.length
+    ? sortedSessions.map((session) => session.score)
+    : sortedHistory.map((entry) => entry.score);
+
+  const comparedCount = Math.min(4, scoreSource.length);
+  const comparedScores = scoreSource.slice(0, comparedCount);
+  const baselineScore = comparedCount ? medianScore(comparedScores) : input.score;
+
+  const fallbackDeltaValue = Math.round(input.score - baselineScore);
+  const explicitDeltaValue =
+    typeof input.baseline.deltaValue === "number" && Number.isFinite(input.baseline.deltaValue)
+      ? Math.round(input.baseline.deltaValue)
+      : null;
+  const deltaValue = explicitDeltaValue ?? fallbackDeltaValue;
+  const deltaLabel = safeString(
+    input.baseline.baselineDelta,
+    `${deltaValue >= 0 ? "+" : ""}${deltaValue} vs baseline`
+  );
+
+  const totalSessions = scoreSource.length + 1;
+  const fallbackLabel = classifyTrend(totalSessions, deltaValue);
+  const baselineLabelRaw = safeString(input.baseline.trendLabel, "").toLowerCase();
+  const label: TrendVsBaseline["label"] =
+    baselineLabelRaw === "improving"
+      ? "Improving"
+      : baselineLabelRaw === "stable"
+        ? "Stable"
+        : baselineLabelRaw === "worsening"
+          ? "Worsening"
+          : baselineLabelRaw === "baseline building"
+            ? "Baseline building"
+            : fallbackLabel;
+
+  let confidence: TrendVsBaseline["confidence"] =
+    totalSessions >= 8 ? "high" : totalSessions >= 4 ? "med" : "low";
+  const baselineConfidence = safeString(input.baseline.confidence, "").toLowerCase();
+  if (baselineConfidence === "high" || baselineConfidence === "med" || baselineConfidence === "low") {
+    confidence = baselineConfidence;
+  }
+  if (input.currentPillars.interruptions.quality === "Noisy") {
+    confidence = "low";
+  } else if (input.currentPillars.interruptions.quality === "Fair" && confidence === "high") {
+    confidence = "med";
+  }
+  if (input.confidenceLabel === "low") {
+    confidence = "low";
+  } else if (input.confidenceLabel === "med" && confidence === "high") {
+    confidence = "med";
+  }
+
+  const reasonRaw = safeString(input.baseline.trendReason, safeString(input.baseline.trendNote, ""));
+  const reasonWords = reasonRaw
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter(Boolean);
+  const reason = reasonWords.slice(0, 12).join(" ");
+
+  const providedPillarSummary = safeString(input.baseline.pillarDeltaSummary, "");
+  const pillarDeltaSummary =
+    providedPillarSummary || buildFallbackPillarDeltaSummary(input.currentPillars, sortedSessions.slice(0, comparedCount));
+
+  return {
+    label,
+    deltaValue,
+    deltaLabel,
+    confidence,
+    comparedCount,
+    comparedToLabel: comparedCount
+      ? `Compared to your last ${comparedCount} sessions`
+      : "Compared to your recent sessions",
+    reason,
+    pillarDeltaSummary
+  } satisfies TrendVsBaseline;
+}
+
 export function buildSessionAnalysisBundle(input: BuildBundleInput): SessionAnalysis {
   const createdAt = input.createdAt ?? new Date().toISOString();
   const duration = Math.max(0, input.waveform.duration || 0);
@@ -965,6 +1156,10 @@ export function buildSessionAnalysisBundle(input: BuildBundleInput): SessionAnal
 
   const score = clamp(Math.round(54 + rhythmScore * 34 + exhaleScore * 10 - interruptionPenalty), 0, 100);
 
+  const priorSessions = (input.sessions ?? [])
+    .filter((session) => session.createdAt !== createdAt)
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+
   const historyScoreAvg = input.history.length ? mean(input.history.map((entry) => entry.score)) : score;
   const fallbackDelta = `${score >= historyScoreAvg ? "+" : ""}${(score - historyScoreAvg).toFixed(1)} vs baseline`;
   const deltaLabel = safeString(baseline.baselineDelta, fallbackDelta);
@@ -987,6 +1182,23 @@ export function buildSessionAnalysisBundle(input: BuildBundleInput): SessionAnal
   if (holdDetected.value === "Unclear" || holdDetected.confidence === "low") {
     confidenceLabel = downgradeConfidence(confidenceLabel, 1);
   }
+
+  const pillars: SessionPillars = {
+    rhythm,
+    exhaleRatio,
+    interruptions,
+    holdDetected
+  };
+
+  const trend = buildTrendVsBaseline({
+    score,
+    baseline,
+    currentPillars: pillars,
+    priorSessions,
+    priorHistory: input.history,
+    confidenceLabel
+  });
+  const resolvedDeltaLabel = safeString(trend.deltaLabel, deltaLabel);
 
   const patternBullets = [
     `Rhythm: ${rhythm.value}`,
@@ -1045,7 +1257,8 @@ export function buildSessionAnalysisBundle(input: BuildBundleInput): SessionAnal
     createdAt,
     mode: input.mode,
     score,
-    deltaLabel,
+    deltaLabel: resolvedDeltaLabel,
+    trend,
     confidenceLabel,
     patternSummary,
     patternBullets,
@@ -1057,12 +1270,7 @@ export function buildSessionAnalysisBundle(input: BuildBundleInput): SessionAnal
     reportLines,
     nextCheckInLabel: nextWeekLabel(createdAt),
     keyMomentTime,
-    pillars: {
-      rhythm,
-      exhaleRatio,
-      interruptions,
-      holdDetected
-    },
+    pillars,
     phaseStats: {
       inhale: phaseStats.inhale,
       hold: phaseStats.hold,
@@ -1092,7 +1300,13 @@ export function appendAnalysisHistory(
     createdAt: analysis.createdAt,
     score: analysis.score,
     envelope: downsample(analysis.waveform.envelope, 120),
-    duration: analysis.waveform.duration
+    duration: analysis.waveform.duration,
+    rhythmLabel: analysis.pillars.rhythm.value,
+    exhaleRatio: analysis.pillars.exhaleRatio.ratio,
+    interruptions: analysis.pillars.interruptions.count,
+    holdDetected: analysis.pillars.holdDetected.detected,
+    confidenceLabel: analysis.confidenceLabel,
+    qualityFlag: analysis.pillars.interruptions.quality
   };
 
   const deduped = history.filter((item) => item.createdAt !== entry.createdAt);

@@ -90,7 +90,13 @@ function historyEntryFromAnalysis(analysis: SessionAnalysis): AnalysisHistoryEnt
     createdAt: analysis.createdAt,
     score: analysis.score,
     envelope: analysis.waveform.envelope.slice(0, 600),
-    duration: analysis.waveform.duration
+    duration: analysis.waveform.duration,
+    rhythmLabel: analysis.pillars.rhythm.value,
+    exhaleRatio: analysis.pillars.exhaleRatio.ratio,
+    interruptions: analysis.pillars.interruptions.count,
+    holdDetected: analysis.pillars.holdDetected.detected,
+    confidenceLabel: analysis.confidenceLabel,
+    qualityFlag: analysis.pillars.interruptions.quality
   };
 }
 

@@ -20,11 +20,6 @@ import styles from "./page.module.css";
 
 const CAPTURE_SECONDS = 15;
 const UPLOAD_ACCEPT = ".mp3,.wav,.m4a,.aac,.webm,.ogg,audio/mpeg,audio/wav,audio/mp4,audio/webm,audio/ogg,audio/aac";
-const BUNDLED_DEMO_SAMPLES = [
-  "/samples/demo-breathing-audio.webm",
-  "/samples/demo-breathing-audio.mp3",
-  "/samples/demo-breathing-audio.wav"
-];
 
 const ACCEPTED_MIME_TYPES = new Set([
   "audio/mpeg",
@@ -47,6 +42,8 @@ type PermissionState = "idle" | "granted" | "denied" | "unsupported";
 type RecorderStopReason = "complete" | "cancel";
 type AgentStatus = "queued" | "running" | "done" | "error";
 type AgentKey = "segmentation" | "baselineTrend" | "clinicalSummary" | "coaching" | "followUp";
+type ProgressStepKey = "signal" | "segmentation" | "baselineTrend" | "clinicalSummary" | "coaching";
+type ProgressStepStatus = "queued" | "running" | "done";
 
 type BreathingCue = {
   atMs: number;
@@ -91,6 +88,11 @@ type AnalyzeEvent =
       message: string;
     };
 
+type ProgressStepConfig = {
+  key: ProgressStepKey;
+  label: string;
+};
+
 const BREATHING_CUES: BreathingCue[] = [
   { atMs: 0, text: "Inhale..." },
   { atMs: 5000, text: "Hold..." },
@@ -103,6 +105,14 @@ const AGENT_BLUEPRINT: Array<Pick<AgentState, "key" | "title" | "modelLabel">> =
   { key: "clinicalSummary", title: "Clinical Summary Agent", modelLabel: "C" },
   { key: "coaching", title: "Coaching Agent", modelLabel: "D" },
   { key: "followUp", title: "Follow-up Agent", modelLabel: "D" }
+];
+
+const PROGRESS_STEPS: ProgressStepConfig[] = [
+  { key: "signal", label: "Signal" },
+  { key: "segmentation", label: "Segmentation" },
+  { key: "baselineTrend", label: "Baseline/Trend" },
+  { key: "clinicalSummary", label: "Clinical Summary" },
+  { key: "coaching", label: "Coaching" }
 ];
 
 function createInitialAgentState(): AgentState[] {
@@ -234,6 +244,115 @@ function valueAsString(value: unknown, fallback = "") {
   return trimmed || fallback;
 }
 
+function normalizeProgressStatus(status: AgentStatus | undefined): ProgressStepStatus {
+  if (status === "running") return "running";
+  if (status === "done" || status === "error") return "done";
+  return "queued";
+}
+
+function parseSegmentationSnapshot(segmentation: unknown) {
+  if (!isObject(segmentation)) {
+    return {
+      inhaleDuration: 0,
+      exhaleDuration: 0,
+      holdDuration: 0,
+      irregularCount: null as number | null,
+      notes: ""
+    };
+  }
+
+  let inhaleDuration = 0;
+  let exhaleDuration = 0;
+  let holdDuration = 0;
+
+  const segments = Array.isArray(segmentation.segments) ? segmentation.segments : [];
+  segments.forEach((segment) => {
+    if (!isObject(segment)) return;
+
+    const start = typeof segment.start === "number" && Number.isFinite(segment.start) ? segment.start : null;
+    const end = typeof segment.end === "number" && Number.isFinite(segment.end) ? segment.end : null;
+    if (start === null || end === null) return;
+
+    const duration = Math.max(0, end - start);
+    const label = valueAsString(segment.label).toLowerCase();
+
+    if (label.includes("inhale")) inhaleDuration += duration;
+    if (label.includes("exhale")) exhaleDuration += duration;
+    if (label.includes("hold")) holdDuration += duration;
+  });
+
+  const irregularCount = Array.isArray(segmentation.irregularWindows) ? segmentation.irregularWindows.length : 0;
+
+  return {
+    inhaleDuration,
+    exhaleDuration,
+    holdDuration,
+    irregularCount,
+    notes: valueAsString(segmentation.notes)
+  };
+}
+
+function resolveRhythmPreview(
+  irregularCount: number | null,
+  notes: string
+): "Stable" | "Slightly Variable" | "Variable" | "Computing..." {
+  const normalizedNotes = notes.toLowerCase();
+  if (normalizedNotes.includes("stable") || normalizedNotes.includes("regular")) {
+    return "Stable";
+  }
+  if (normalizedNotes.includes("minor") || normalizedNotes.includes("slight")) {
+    return "Slightly Variable";
+  }
+  if (irregularCount === null) return "Computing...";
+  if (irregularCount <= 1) return "Stable";
+  if (irregularCount <= 3) return "Slightly Variable";
+  return "Variable";
+}
+
+function formatMiniRatio(value: number) {
+  return `${value.toFixed(2)}x`;
+}
+
+function ProgressStepIcon({ stepKey }: { stepKey: ProgressStepKey }) {
+  if (stepKey === "signal") {
+    return (
+      <svg viewBox="0 0 16 16" className={styles.progressStepIcon} aria-hidden>
+        <path d="M1.5 8h2.2l1.2-3.3 2.1 6 1.7-4h2.1l1.2 1.3h2" />
+      </svg>
+    );
+  }
+
+  if (stepKey === "segmentation") {
+    return (
+      <svg viewBox="0 0 16 16" className={styles.progressStepIcon} aria-hidden>
+        <path d="M2.2 3.2h3.2v9.6H2.2zM6.9 5.2h3.2v7.6H6.9zM11.6 2.4h2.2v10.4h-2.2z" />
+      </svg>
+    );
+  }
+
+  if (stepKey === "baselineTrend") {
+    return (
+      <svg viewBox="0 0 16 16" className={styles.progressStepIcon} aria-hidden>
+        <path d="M2 12.5h12M3.2 10.4l3-2.3 2.2 1.4 4.3-3.8" />
+      </svg>
+    );
+  }
+
+  if (stepKey === "clinicalSummary") {
+    return (
+      <svg viewBox="0 0 16 16" className={styles.progressStepIcon} aria-hidden>
+        <path d="M4 2.8h8v10.4H4zM5.4 5.6h5.2M5.4 8h5.2M5.4 10.4h3.6" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 16 16" className={styles.progressStepIcon} aria-hidden>
+      <path d="M8 1.8l1.7 3.4 3.8.6-2.7 2.6.6 3.8L8 10.5 4.6 12.2l.6-3.8L2.5 5.8l3.8-.6z" />
+    </svg>
+  );
+}
+
 function summarizeAgentResult(value: unknown) {
   if (isObject(value)) {
     if (typeof value.baselineDelta === "string") {
@@ -266,39 +385,6 @@ function wait(ms: number) {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-function buildDemoWaveform(duration = CAPTURE_SECONDS, bins = 280): AudioFeatureTimeline {
-  const envelope: number[] = [];
-  const energy: number[] = [];
-
-  for (let index = 0; index < bins; index += 1) {
-    const time = (index / Math.max(1, bins - 1)) * duration;
-    const cycle = time % 5;
-
-    let base = 0.15;
-    if (cycle < 2) {
-      base = 0.15 + (cycle / 2) * 0.8;
-    } else if (cycle < 3) {
-      base = 0.92;
-    } else {
-      base = 0.92 - ((cycle - 3) / 2) * 0.74;
-    }
-
-    const ripple = Math.sin(time * 2.4) * 0.03 + Math.sin(time * 6.7) * 0.02;
-    const value = clamp(base + ripple, 0.05, 1);
-    const energyValue = clamp(value * 0.84 + 0.08 + Math.sin(time * 1.7) * 0.015, 0.04, 1);
-
-    envelope.push(Number(value.toFixed(4)));
-    energy.push(Number(energyValue.toFixed(4)));
-  }
-
-  return {
-    envelope,
-    energy,
-    duration,
-    sampleRate: 48000
-  };
 }
 
 function buildDemoAgentResults() {
@@ -354,7 +440,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const { demoMode, toggleDemoMode } = useDemoMode();
   const demoScript = useDemoScript();
   const { sessionVideo, setSessionVideo, clearSessionVideo } = useSessionVideo();
-  const { sessionAnalysis, analysisHistory, setSessionAnalysis, setAnalysisHistory, clearSessionAnalysis } =
+  const { sessionAnalysis, analysisHistory, sessionSnapshots, setSessionAnalysis, setAnalysisHistory, clearSessionAnalysis } =
     useSessionAnalysis();
   const { deviceId, assistantId, threadId, isReady: identityReady, setBackboardContext } = useBackboardIdentity();
 
@@ -367,7 +453,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [coachMessage, setCoachMessage] = useState<string | null>(null);
   const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
-  const [agentsOpen, setAgentsOpen] = useState(false);
+  const [agentsExpanded, setAgentsExpanded] = useState(false);
 
   const [waveformData, setWaveformData] = useState<AudioFeatureTimeline | null>(null);
   const [waveformLoading, setWaveformLoading] = useState(false);
@@ -383,11 +469,13 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const [analysisRunning, setAnalysisRunning] = useState(false);
   const [analysisResults, setAnalysisResults] = useState<Record<string, unknown> | null>(null);
   const [agentStates, setAgentStates] = useState<AgentState[]>(() => createInitialAgentState());
-  const [isDemoSample, setIsDemoSample] = useState(false);
+  const [agentOutputs, setAgentOutputs] = useState<Partial<Record<AgentKey, unknown>>>({});
+  const [autoAnalyzedSessionId, setAutoAnalyzedSessionId] = useState<number | null>(null);
 
   const videoRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const sampleFileInputRef = useRef<HTMLInputElement>(null);
+  const agentsSectionRef = useRef<HTMLDivElement>(null);
+  const wasAnalyzingRef = useRef(false);
 
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -408,7 +496,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const liveEnvelopeRef = useRef<number[]>([]);
   const liveEnergyRef = useRef<number[]>([]);
 
-  const flowStep = sessionVideo ? 3 : inputMode ? 2 : 1;
+  const flowStep = analysisRunning || sessionAnalysis || analysisResults ? 3 : sessionVideo || inputMode ? 2 : 1;
   const progressPercent = ((CAPTURE_SECONDS - secondsLeft) / CAPTURE_SECONDS) * 100;
 
   const playbackCurrentTime = isRecording ? CAPTURE_SECONDS - secondsLeft : videoCurrentTime;
@@ -475,6 +563,149 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
     return { total, done, running, errors };
   }, [agentStates]);
+
+  const timelineSteps = useMemo(() => {
+    const statusFor = (key: AgentKey) => agentStates.find((agent) => agent.key === key)?.status;
+    const followUpProgress = normalizeProgressStatus(statusFor("followUp"));
+    const coachingProgress =
+      followUpProgress === "running" || followUpProgress === "done"
+        ? followUpProgress
+        : normalizeProgressStatus(statusFor("coaching"));
+    const signalReady = Boolean(
+      sessionVideo &&
+        (waveformData ||
+          waveformError ||
+          displayedEnvelope.length > 0 ||
+          displayedEnergy.length > 0 ||
+          analysisRunning ||
+          analysisResults ||
+          sessionAnalysis)
+    );
+
+    return PROGRESS_STEPS.map((step) => {
+      if (step.key === "signal") {
+        return {
+          ...step,
+          status: signalReady ? "done" : analysisRunning ? "running" : "queued"
+        } satisfies ProgressStepConfig & { status: ProgressStepStatus };
+      }
+
+      if (step.key === "coaching") {
+        return {
+          ...step,
+          status: coachingProgress
+        } satisfies ProgressStepConfig & { status: ProgressStepStatus };
+      }
+
+      return {
+        ...step,
+        status: normalizeProgressStatus(statusFor(step.key as AgentKey))
+      } satisfies ProgressStepConfig & { status: ProgressStepStatus };
+    });
+  }, [
+    agentStates,
+    analysisResults,
+    analysisRunning,
+    displayedEnergy.length,
+    displayedEnvelope.length,
+    sessionAnalysis,
+    sessionVideo,
+    waveformData,
+    waveformError
+  ]);
+
+  const progressDoneCount = useMemo(
+    () => timelineSteps.filter((step) => step.status === "done").length,
+    [timelineSteps]
+  );
+  const progressRunningCount = useMemo(
+    () => timelineSteps.filter((step) => step.status === "running").length,
+    [timelineSteps]
+  );
+
+  const analysisComplete = useMemo(
+    () => !analysisRunning && progressDoneCount === PROGRESS_STEPS.length && Boolean(sessionAnalysis || analysisResults),
+    [analysisResults, analysisRunning, progressDoneCount, sessionAnalysis]
+  );
+
+  const progressFraction = useMemo(() => {
+    if (analysisComplete) return 1;
+
+    const base = progressDoneCount / PROGRESS_STEPS.length;
+    if (analysisRunning && progressRunningCount > 0) {
+      return clamp(base + 0.45 / PROGRESS_STEPS.length, 0, 0.98);
+    }
+
+    return clamp(base, 0, 1);
+  }, [analysisComplete, analysisRunning, progressDoneCount, progressRunningCount]);
+
+  const progressLabel = analysisComplete
+    ? "Analysis complete"
+    : `Analyzing... ${progressDoneCount}/${PROGRESS_STEPS.length}`;
+
+  const livePillars = useMemo(() => {
+    if (sessionAnalysis?.pillars) {
+      return {
+        rhythm: sessionAnalysis.pillars.rhythm.value,
+        exhaleRatio: sessionAnalysis.pillars.exhaleRatio.value,
+        interruptions: sessionAnalysis.pillars.interruptions.value,
+        hold: sessionAnalysis.pillars.holdDetected.value
+      };
+    }
+
+    const preview = {
+      rhythm: "Computing...",
+      exhaleRatio: "Computing...",
+      interruptions: "Computing...",
+      hold: "Computing..."
+    };
+
+    const segmentation = isObject(agentOutputs.segmentation) ? agentOutputs.segmentation : null;
+    const segmentationStatus = agentStates.find((agent) => agent.key === "segmentation")?.status;
+
+    if (segmentation) {
+      const snapshot = parseSegmentationSnapshot(segmentation);
+      preview.rhythm = resolveRhythmPreview(snapshot.irregularCount, snapshot.notes);
+
+      if (snapshot.inhaleDuration > 0 && snapshot.exhaleDuration > 0) {
+        preview.exhaleRatio = formatMiniRatio(snapshot.exhaleDuration / snapshot.inhaleDuration);
+      } else if (segmentationStatus === "done") {
+        preview.exhaleRatio = "--";
+      }
+
+      if (snapshot.irregularCount !== null) {
+        preview.interruptions = String(snapshot.irregularCount);
+      } else if (segmentationStatus === "done") {
+        preview.interruptions = "--";
+      }
+
+      if (snapshot.holdDuration > 0.24) {
+        preview.hold = "Yes";
+      } else if (segmentationStatus === "done") {
+        preview.hold = "No";
+      }
+    }
+
+    if (preview.rhythm === "Computing...") {
+      const baseline = isObject(agentOutputs.baselineTrend) ? agentOutputs.baselineTrend : null;
+      const trendNote = valueAsString(baseline?.trendNote).toLowerCase();
+      if (trendNote.includes("stable") || trendNote.includes("improved")) {
+        preview.rhythm = "Stable";
+      }
+    }
+
+    return preview;
+  }, [agentOutputs.baselineTrend, agentOutputs.segmentation, agentStates, sessionAnalysis?.pillars]);
+
+  const livePillarCards = useMemo(
+    () => [
+      { key: "rhythm", label: "Rhythm", value: livePillars.rhythm },
+      { key: "exhaleRatio", label: "Exhale Ratio", value: livePillars.exhaleRatio },
+      { key: "interruptions", label: "Interruptions", value: livePillars.interruptions },
+      { key: "hold", label: "Hold", value: livePillars.hold }
+    ],
+    [livePillars.exhaleRatio, livePillars.hold, livePillars.interruptions, livePillars.rhythm]
+  );
 
   const stepTransition: Variants = useMemo(() => {
     if (reducedMotion) {
@@ -754,7 +985,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
         createdAt: Date.now()
       });
 
-      setStatusMessage("15 second recording ready for Backboard analysis.");
+      setStatusMessage("Recording complete. Preparing analysis...");
       setAnalysisMessage(null);
       setErrorMessage(null);
     },
@@ -795,13 +1026,14 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     setAnalysisMessage(null);
     setAnalysisResults(null);
     setAgentStates(createInitialAgentState());
+    setAgentOutputs({});
     clearSessionAnalysis();
     setCoachMessage(null);
     setWaveformError(null);
     setWaveformData(null);
     setVideoCurrentTime(0);
     setVideoDuration(0);
-    setIsDemoSample(false);
+    setAutoAnalyzedSessionId(null);
     setStatusMessage("Requesting microphone access...");
 
     try {
@@ -863,18 +1095,10 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     }
   }, [clearSessionVideo, clearSessionAnalysis, finalizeRecording, startLiveWaveform, stopMediaTracks, stopRecording]);
 
-  const chooseRecord = useCallback(() => {
-    setIsDemoSample(false);
-    setInputMode("record");
-    setErrorMessage(null);
-    setStatusMessage("Press Start to capture exactly 15 seconds.");
-  }, []);
-
   const triggerUploadPicker = useCallback(() => {
-    setIsDemoSample(false);
     setInputMode("upload");
     setErrorMessage(null);
-    setStatusMessage("Select an audio file to preview and analyze.");
+    setStatusMessage("Select an audio file. Analysis starts automatically after waveform extraction.");
     fileInputRef.current?.click();
   }, []);
 
@@ -903,12 +1127,13 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       setWaveformError(null);
       setVideoCurrentTime(0);
       setVideoDuration(0);
+      setAutoAnalyzedSessionId(null);
       setInputMode("upload");
-      setIsDemoSample(false);
-      setStatusMessage("Uploaded audio ready for Backboard analysis.");
+      setStatusMessage("Uploaded audio loaded. Preparing analysis...");
       setAnalysisMessage(null);
       setAnalysisResults(null);
       setAgentStates(createInitialAgentState());
+      setAgentOutputs({});
       clearSessionAnalysis();
       if (demoMode) {
         demoScript.completeStep("loadSample");
@@ -916,96 +1141,6 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       setErrorMessage(null);
     },
     [clearSessionAnalysis, demoMode, demoScript, setSessionVideo]
-  );
-
-  const loadDemoSample = useCallback(async () => {
-    setInputMode("upload");
-    setErrorMessage(null);
-    setAnalysisMessage(null);
-    setAnalysisResults(null);
-    setAgentStates(createInitialAgentState());
-    clearSessionAnalysis();
-    setVideoCurrentTime(0);
-    setVideoDuration(0);
-    setWaveformError(null);
-    setWaveformLoading(false);
-    setStatusMessage("Loading bundled demo sample...");
-
-    let demoBlob: Blob | null = null;
-    let demoName = "demo-breathing.webm";
-
-    for (const samplePath of BUNDLED_DEMO_SAMPLES) {
-      try {
-        const response = await fetch(samplePath, { cache: "no-store" });
-        if (!response.ok) continue;
-
-        const blob = await response.blob();
-        if (!blob.size) continue;
-
-        demoBlob = blob;
-        demoName = samplePath.split("/").pop() || demoName;
-        break;
-      } catch {
-        // Try next bundled sample option.
-      }
-    }
-
-    if (!demoBlob) {
-      setStatusMessage("Bundled sample missing. Select a local sample audio file to continue demo mode.");
-      sampleFileInputRef.current?.click();
-      return;
-    }
-
-    const objectUrl = URL.createObjectURL(demoBlob);
-    setSessionVideo({
-      blob: demoBlob,
-      url: objectUrl,
-      source: "upload",
-      fileName: demoName,
-      createdAt: Date.now()
-    });
-
-    setWaveformData(buildDemoWaveform());
-    setIsDemoSample(true);
-    demoScript.completeStep("loadSample");
-    setStatusMessage("Demo sample loaded. Press Analyze to run the multi-agent pipeline.");
-  }, [clearSessionAnalysis, demoScript, setSessionVideo]);
-
-  const handleDemoSampleSelected = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      event.target.value = "";
-      if (!file) return;
-
-      if (!isAcceptableAudioFile(file)) {
-        setErrorMessage("Unsupported sample format. Please select mp3, wav, m4a, aac, webm, or ogg.");
-        return;
-      }
-
-      const objectUrl = URL.createObjectURL(file);
-      setSessionVideo({
-        blob: file,
-        url: objectUrl,
-        source: "upload",
-        fileName: file.name,
-        createdAt: Date.now()
-      });
-
-      setInputMode("upload");
-      setAnalysisMessage(null);
-      setAnalysisResults(null);
-      setAgentStates(createInitialAgentState());
-      clearSessionAnalysis();
-      setVideoCurrentTime(0);
-      setVideoDuration(0);
-      setWaveformData(buildDemoWaveform());
-      setWaveformError(null);
-      setWaveformLoading(false);
-      setIsDemoSample(true);
-      demoScript.completeStep("loadSample");
-      setStatusMessage("Sample selected. Press Analyze to run the demo flow.");
-    },
-    [clearSessionAnalysis, demoScript, setSessionVideo]
   );
 
   const seekVideo = useCallback(
@@ -1057,11 +1192,27 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
           time: marker.time,
           label: marker.label
         })),
-        history: analysisHistory
+        history: analysisHistory,
+        sessions: sessionSnapshots
       });
       const nextHistory = appendAnalysisHistory(analysisHistory, analysisBundle);
       setAnalysisHistory(nextHistory);
       setSessionAnalysis(analysisBundle, nextHistory);
+
+      void fetch("/api/user/snapshots", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          analysis: analysisBundle,
+          deviceId,
+          source: sessionVideo?.source ?? null,
+          fileName: sessionVideo?.fileName
+        })
+      }).catch(() => {
+        // Best effort persistence (anonymous / offline sessions can fail).
+      });
 
       if (sessionVideo?.blob) {
         void archiveVideoBlob(analysisBundle.createdAt, sessionVideo.blob).catch(() => {
@@ -1082,7 +1233,11 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       demoScript,
       eventMarkers,
       mode,
+      deviceId,
       sessionVideo?.blob,
+      sessionVideo?.source,
+      sessionVideo?.fileName,
+      sessionSnapshots,
       setAnalysisHistory,
       setSessionAnalysis,
       waveformData?.energy,
@@ -1097,13 +1252,14 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       const stepDelay = reducedMotion ? 45 : 360;
       const results = buildDemoAgentResults();
 
-      setAgentsOpen(true);
+      setAgentsExpanded(true);
       setAnalysisRunning(true);
       setAnalysisResults(null);
       setSessionAnalysis(null);
       setAnalysisMessage("Demo multi-agent pipeline running...");
       setErrorMessage(null);
       setAgentStates(createInitialAgentState());
+      setAgentOutputs({});
 
       try {
         for (const agent of AGENT_BLUEPRINT) {
@@ -1117,6 +1273,11 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
             (isObject(results[agent.key]) ? (results[agent.key] as Record<string, unknown>) : { ok: true }) ?? {
               ok: true
             };
+
+          setAgentOutputs((previous) => ({
+            ...previous,
+            [agent.key]: output
+          }));
 
           updateAgentState(agent.key, {
             status: "done",
@@ -1136,12 +1297,24 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     [commitAnalysisResults, reducedMotion, setSessionAnalysis, updateAgentState]
   );
 
-  const handleAnalyze = useCallback(async () => {
+  const runAnalysis = useCallback(async () => {
     if (!sessionVideo || isRecording || analysisRunning || (!identityReady && !demoMode)) return;
 
     const envelopeForPipeline = downsample(waveformData?.envelope ?? displayedEnvelope, 96);
     const energyForPipeline = downsample(waveformData?.energy ?? displayedEnergy, 96);
     const featureStats = computeFeatureStats(energyForPipeline);
+    const recentSessions = sessionSnapshots.slice(0, 4).map((session) => ({
+      createdAt: session.createdAt,
+      score: session.score,
+      confidence: session.confidenceLabel,
+      quality: session.pillars.interruptions.quality,
+      pillars: {
+        rhythmLabel: session.pillars.rhythm.value,
+        exhaleRatio: session.pillars.exhaleRatio.ratio,
+        interruptions: session.pillars.interruptions.count,
+        holdDetected: session.pillars.holdDetected.detected
+      }
+    }));
 
     if (demoMode) {
       await runDemoPipeline({
@@ -1152,13 +1325,14 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       return;
     }
 
-    setAgentsOpen(true);
+    setAgentsExpanded(true);
     setAnalysisRunning(true);
     setAnalysisResults(null);
     setSessionAnalysis(null);
     setAnalysisMessage("Backboard multi-agent pipeline running...");
     setErrorMessage(null);
     setAgentStates(createInitialAgentState());
+    setAgentOutputs({});
 
     try {
       const response = await fetch("/api/backboard/analyze", {
@@ -1193,6 +1367,9 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
               time: marker.time,
               label: marker.label
             }))
+          },
+          historyContext: {
+            sessions: recentSessions
           }
         })
       });
@@ -1219,6 +1396,13 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
         }
 
         if (event.type === "agent") {
+          if (event.output?.result !== undefined) {
+            setAgentOutputs((previous) => ({
+              ...previous,
+              [event.key]: event.output?.result
+            }));
+          }
+
           updateAgentState(event.key, {
             status: event.status,
             message: event.message,
@@ -1236,6 +1420,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
         if (event.type === "complete") {
           setBackboardContext({ assistantId: event.assistantId, threadId: event.threadId });
+          setAgentOutputs(event.results as Partial<Record<AgentKey, unknown>>);
           commitAnalysisResults(
             event.results,
             {
@@ -1306,6 +1491,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     sessionVideo,
     setBackboardContext,
     setSessionAnalysis,
+    sessionSnapshots,
     threadId,
     updateAgentState,
     voiceCoachEnabled,
@@ -1313,31 +1499,6 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     waveformData?.envelope,
     waveformDuration
   ]);
-
-  const handleReset = useCallback(() => {
-    clearSessionVideo();
-    clearSessionAnalysis();
-    stopRecording("cancel");
-    stopVoiceCoach();
-    stopLiveWaveform();
-    setInputMode(null);
-    setIsRecording(false);
-    setSecondsLeft(CAPTURE_SECONDS);
-    setAnalysisMessage(null);
-    setAnalysisResults(null);
-    setAnalysisRunning(false);
-    setAgentStates(createInitialAgentState());
-    setCoachMessage(null);
-    setErrorMessage(null);
-    setWaveformData(null);
-    setWaveformError(null);
-    setWaveformLoading(false);
-    setLiveWaveform({ envelope: [], energy: [] });
-    setVideoCurrentTime(0);
-    setVideoDuration(0);
-    setIsDemoSample(false);
-    setStatusMessage("Choose Record or Upload to begin.");
-  }, [clearSessionAnalysis, clearSessionVideo, stopLiveWaveform, stopRecording, stopVoiceCoach]);
 
   useEffect(() => {
     if (!isRecording) return;
@@ -1405,7 +1566,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   }, [sessionVideo?.url, isRecording]);
 
   useEffect(() => {
-    if (!sessionVideo || isRecording || isDemoSample) return;
+    if (!sessionVideo || isRecording) return;
 
     let cancelled = false;
 
@@ -1430,7 +1591,57 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     return () => {
       cancelled = true;
     };
-  }, [isDemoSample, isRecording, sessionVideo?.createdAt, sessionVideo?.blob]);
+  }, [isRecording, sessionVideo?.createdAt, sessionVideo?.blob]);
+
+  useEffect(() => {
+    if (!sessionVideo) {
+      setAutoAnalyzedSessionId(null);
+    }
+  }, [sessionVideo?.createdAt, sessionVideo]);
+
+  useEffect(() => {
+    const sessionId = sessionVideo?.createdAt;
+    if (!sessionId) return;
+    if (isRecording || analysisRunning || waveformLoading) return;
+    const uploadNeedsDecodedWaveform = sessionVideo?.source === "upload";
+    if (uploadNeedsDecodedWaveform && (waveformError || !waveformData)) return;
+    if (!waveformData && !waveformError) return;
+    if ((!identityReady && !demoMode) || autoAnalyzedSessionId === sessionId) return;
+
+    setAutoAnalyzedSessionId(sessionId);
+    setStatusMessage("Analyzing...");
+    void runAnalysis();
+  }, [
+    analysisRunning,
+    autoAnalyzedSessionId,
+    demoMode,
+    identityReady,
+    isRecording,
+    runAnalysis,
+    sessionVideo?.createdAt,
+    waveformData,
+    waveformError,
+    waveformLoading
+  ]);
+
+  useEffect(() => {
+    if (!analysisRunning) return;
+    setAgentsExpanded(true);
+
+    if (agentsSectionRef.current) {
+      agentsSectionRef.current.scrollIntoView({
+        behavior: reducedMotion ? "auto" : "smooth",
+        block: "start"
+      });
+    }
+  }, [analysisRunning, reducedMotion]);
+
+  useEffect(() => {
+    if (wasAnalyzingRef.current && !analysisRunning && (agentProgress.done > 0 || agentProgress.errors > 0)) {
+      setAgentsExpanded(false);
+    }
+    wasAnalyzingRef.current = analysisRunning;
+  }, [agentProgress.done, agentProgress.errors, analysisRunning]);
 
   useEffect(() => {
     setPermissionState(canRecordInBrowser() ? "idle" : "unsupported");
@@ -1498,7 +1709,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
               <ol className={styles.instructionList}>
                 <li>Choose input: Record or Upload</li>
                 <li>Preview your 15s breathing audio clip</li>
-                <li>Run Analyze to start Backboard agents</li>
+                <li>Analysis starts automatically after capture</li>
               </ol>
 
               <div className={styles.chipRow}>
@@ -1550,9 +1761,20 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                 <SectionTitle as="h2" className={styles.previewTitle}>
                   {flowStep === 1 ? "Choose Input" : flowStep === 2 ? "Capture / Preview" : "Analyze"}
                 </SectionTitle>
-                <Pill className={styles.timerPill}>
-                  {isRecording ? `Recording ${formatClock(secondsLeft)}` : `Target ${CAPTURE_SECONDS}s`}
-                </Pill>
+                <div className={styles.previewHeaderRight}>
+                  <AnimatePresence>
+                    {analysisRunning ? (
+                      <motion.div variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
+                        <Pill className={styles.analyzingPill}>
+                          Analyzing... {progressDoneCount}/{PROGRESS_STEPS.length}
+                        </Pill>
+                      </motion.div>
+                    ) : null}
+                  </AnimatePresence>
+                  <Pill className={styles.timerPill}>
+                    {isRecording ? `Recording ${formatClock(secondsLeft)}` : `Target ${CAPTURE_SECONDS}s`}
+                  </Pill>
+                </div>
               </div>
 
               <AnimatePresence mode="wait">
@@ -1565,23 +1787,9 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                     animate="visible"
                     exit="exit"
                   >
-                    <div className={styles.chooseGrid}>
-                      <button type="button" className={styles.chooseCard} onClick={chooseRecord}>
-                        <strong>Record Audio</strong>
-                        <span>Use your microphone for an exact 15s capture.</span>
-                      </button>
-
-                      <button type="button" className={styles.chooseCard} onClick={triggerUploadPicker}>
-                        <strong>Upload Audio</strong>
-                        <span>Bring an existing mp3, wav, m4a, aac, webm, or ogg file.</span>
-                      </button>
-
-                      {demoMode ? (
-                        <button type="button" className={styles.chooseCard} onClick={() => void loadDemoSample()}>
-                          <strong>Load Sample</strong>
-                          <span>Judge-safe demo audio with guided pipeline outputs.</span>
-                        </button>
-                      ) : null}
+                    <div className={styles.idleInfo}>
+                      <p>Use Start for a live 15-second capture, or Upload to analyze an existing audio file.</p>
+                      <p>Analysis runs automatically once audio is ready.</p>
                     </div>
                   </motion.div>
                 ) : (
@@ -1627,85 +1835,214 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                     <HintText className={styles.previewHint}>
                       {isRecording
                         ? "Live waveform uses mic input."
-                        : isDemoSample
-                          ? "Demo waveform loaded. Analyze runs a deterministic multi-agent showcase."
                         : flowStep === 3
-                          ? "Waveform synced to timeline. Analyze runs Backboard multi-agent pipeline."
+                          ? "Waveform synced to timeline. Backboard pipeline runs automatically."
                           : "Preview waveform before analysis."}
                     </HintText>
+
+                    <motion.section
+                      ref={agentsSectionRef}
+                      className={styles.agentsSection}
+                      variants={fadeUp}
+                      initial={reducedMotion ? "visible" : "hidden"}
+                      animate="visible"
+                    >
+                      <div className={styles.agentsHeader}>
+                        <div className={styles.agentsHeaderMain}>
+                          <SectionTitle as="h3" className={styles.agentsTitle}>
+                            Backboard Multi-Agent Pipeline
+                          </SectionTitle>
+                          <Pill
+                            className={cx(
+                              styles.agentsProgressPill,
+                              analysisRunning
+                                ? styles.agentsProgressRunning
+                                : agentProgress.done === agentProgress.total && agentProgress.total > 0
+                                  ? styles.agentsProgressDone
+                                  : undefined
+                            )}
+                          >
+                            {analysisRunning
+                              ? `Analyzing... ${agentProgress.done}/${agentProgress.total}`
+                              : agentProgress.done === agentProgress.total && agentProgress.total > 0
+                                ? "Complete"
+                                : `Ready ${agentProgress.done}/${agentProgress.total}`}
+                          </Pill>
+                        </div>
+                        <button
+                          type="button"
+                          className={styles.agentsCollapseButton}
+                          onClick={() => setAgentsExpanded((expanded) => !expanded)}
+                          aria-expanded={agentsExpanded}
+                        >
+                          {agentsExpanded ? "Collapse" : "Expand"}
+                        </button>
+                      </div>
+
+                      <HintText className={styles.agentsCopy}>
+                        Live orchestration: queued - running - done. Models labeled A/B/C/D.
+                      </HintText>
+
+                      <AnimatePresence initial={false}>
+                        {agentsExpanded ? (
+                          <motion.div
+                            className={styles.agentRows}
+                            variants={staggerChildren}
+                            initial="hidden"
+                            animate="visible"
+                            exit="exit"
+                          >
+                            {agentStates.map((agent) => (
+                              <motion.button
+                                key={agent.key}
+                                type="button"
+                                variants={fadeUp}
+                                className={cx(
+                                  styles.agentRow,
+                                  agent.status === "running" && styles.agentRowRunning,
+                                  agent.status === "done" && styles.agentRowDone,
+                                  agent.status === "error" && styles.agentRowError
+                                )}
+                                onClick={() => {
+                                  if (agent.key === "segmentation") {
+                                    const firstMarker = eventMarkers[0];
+                                    if (firstMarker) seekVideo(firstMarker.time, "marker", `${agent.title} marker`);
+                                  }
+                                }}
+                              >
+                                <span className={styles.agentTop}>
+                                  <span className={styles.agentTitle}>{agent.title}</span>
+                                  <span className={styles.agentModel}>Model {agent.modelLabel}</span>
+                                </span>
+                                <span className={styles.agentMetaRow}>
+                                  <span
+                                    className={cx(
+                                      styles.agentStatus,
+                                      agent.status === "running" && styles.agentStatusRunning,
+                                      agent.status === "done" && styles.agentStatusDone,
+                                      agent.status === "error" && styles.agentStatusError
+                                    )}
+                                  >
+                                    {agent.status}
+                                  </span>
+                                </span>
+                                <span className={styles.agentSummary}>{agent.message || agent.summary}</span>
+                                {agent.status === "running" ? (
+                                  <span className={styles.agentProgressTrack} aria-hidden>
+                                    <span className={styles.agentProgressFill} />
+                                  </span>
+                                ) : null}
+                              </motion.button>
+                            ))}
+                          </motion.div>
+                        ) : null}
+                      </AnimatePresence>
+
+                      <div className={styles.agentFooter}>
+                        <Pill className={styles.statusChip}>Running: {agentProgress.running}</Pill>
+                        <Pill className={styles.statusChip}>Errors: {agentProgress.errors}</Pill>
+                        <Pill className={styles.statusChip}>Thread: {threadId ? "linked" : "new"}</Pill>
+                      </div>
+                    </motion.section>
+
+                    <motion.section variants={fadeUp} initial={reducedMotion ? "visible" : "hidden"} animate="visible">
+                      <GlassCard
+                        className={cx(styles.analysisProgressCard, reducedMotion && styles.analysisProgressReducedMotion)}
+                      >
+                        <div className={styles.analysisProgressHeader}>
+                          <SectionTitle as="h3" className={styles.analysisProgressTitle}>
+                            {analysisComplete ? "Analysis complete" : "Analysis Progress"}
+                          </SectionTitle>
+                          <Pill
+                            className={cx(
+                              styles.analysisProgressStatus,
+                              analysisComplete && styles.analysisProgressStatusDone
+                            )}
+                          >
+                            {progressLabel}
+                          </Pill>
+                        </div>
+
+                        <div className={styles.analysisProgressBarBlock}>
+                          <p className={styles.analysisProgressLabel}>{progressLabel}</p>
+                          <div className={styles.analysisProgressTrack} aria-hidden>
+                            <motion.span
+                              className={styles.analysisProgressFill}
+                              animate={{ width: `${Math.round(progressFraction * 100)}%` }}
+                              transition={
+                                reducedMotion
+                                  ? { duration: 0.12 }
+                                  : {
+                                      duration: 0.46,
+                                      ease: [0.22, 1, 0.36, 1]
+                                    }
+                              }
+                            />
+                          </div>
+                        </div>
+
+                        <motion.div className={styles.analysisTimeline} variants={staggerChildren}>
+                          {timelineSteps.map((step) => (
+                            <motion.div
+                              key={step.key}
+                              variants={fadeUp}
+                              className={cx(
+                                styles.analysisStep,
+                                step.status === "done" && styles.analysisStepDone,
+                                step.status === "running" && styles.analysisStepRunning
+                              )}
+                            >
+                              <span className={styles.analysisStepIconWrap}>
+                                <ProgressStepIcon stepKey={step.key} />
+                              </span>
+                              <span className={styles.analysisStepName}>{step.label}</span>
+                            </motion.div>
+                          ))}
+                        </motion.div>
+
+                        <div className={styles.livePillarsRow}>
+                          {livePillarCards.map((pillar) => (
+                            <div key={pillar.key} className={styles.livePillarCard}>
+                              <span className={styles.livePillarLabel}>{pillar.label}</span>
+                              <AnimatePresence mode="wait" initial={false}>
+                                <motion.span
+                                  key={`${pillar.key}-${pillar.value}`}
+                                  className={styles.livePillarValue}
+                                  variants={fadeUp}
+                                  initial="hidden"
+                                  animate="visible"
+                                  exit="hidden"
+                                >
+                                  {pillar.value}
+                                </motion.span>
+                              </AnimatePresence>
+                            </div>
+                          ))}
+                        </div>
+
+                        <AnimatePresence>
+                          {analysisComplete ? (
+                            <motion.div
+                              className={styles.analysisResultsCta}
+                              variants={fadeUp}
+                              initial="hidden"
+                              animate="visible"
+                              exit="hidden"
+                              {...(reducedMotion ? {} : hoverGlow)}
+                            >
+                              <GlowButton type="button" className={styles.controlButton} onClick={() => router.push("/results")}>
+                                View Results
+                              </GlowButton>
+                            </motion.div>
+                          ) : null}
+                        </AnimatePresence>
+                      </GlassCard>
+                    </motion.section>
                   </motion.div>
                 )}
               </AnimatePresence>
             </GlassCard>
           </motion.div>
-
-          <motion.aside variants={fadeIn} className={styles.rightRail}>
-            <div className={styles.agentsDock}>
-              <button
-                type="button"
-                className={styles.agentsHandle}
-                onClick={() => setAgentsOpen((open) => !open)}
-                aria-expanded={agentsOpen}
-              >
-                Agents {agentProgress.done}/{agentProgress.total}
-              </button>
-
-              <AnimatePresence>
-                {agentsOpen ? (
-                  <motion.div
-                    className={styles.agentsPanelWrap}
-                    variants={stepTransition}
-                    initial="hidden"
-                    animate="visible"
-                    exit="exit"
-                  >
-                    <GlassCard className={styles.agentsPanel}>
-                      <SectionTitle as="h3" className={styles.agentsTitle}>
-                        Backboard Multi-Agent Pipeline
-                      </SectionTitle>
-                      <HintText className={styles.agentsCopy}>
-                        Live orchestration: queued - running - done. Models labeled A/B/C/D.
-                      </HintText>
-
-                      <div className={styles.agentRows}>
-                        {agentStates.map((agent) => (
-                          <button
-                            key={agent.key}
-                            type="button"
-                            className={cx(
-                              styles.agentRow,
-                              agent.status === "running" && styles.agentRowRunning,
-                              agent.status === "done" && styles.agentRowDone,
-                              agent.status === "error" && styles.agentRowError
-                            )}
-                            onClick={() => {
-                              if (agent.key === "segmentation") {
-                                const firstMarker = eventMarkers[0];
-                                if (firstMarker) seekVideo(firstMarker.time, "marker", `${agent.title} marker`);
-                              }
-                            }}
-                          >
-                            <span className={styles.agentTop}>
-                              <span className={styles.agentTitle}>{agent.title}</span>
-                              <span className={styles.agentModel}>Model {agent.modelLabel}</span>
-                            </span>
-                            <span className={styles.agentStatus}>{agent.status}</span>
-                            <span className={styles.agentSummary}>{agent.message || agent.summary}</span>
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className={styles.agentMetaRow}>
-                        <Pill className={styles.statusChip}>Running: {agentProgress.running}</Pill>
-                        <Pill className={styles.statusChip}>Errors: {agentProgress.errors}</Pill>
-                        <Pill className={styles.statusChip}>Thread: {threadId ? "linked" : "new"}</Pill>
-                      </div>
-                    </GlassCard>
-                  </motion.div>
-                ) : null}
-              </AnimatePresence>
-            </div>
-          </motion.aside>
         </motion.section>
 
         <motion.footer
@@ -1715,25 +2052,31 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
           animate="visible"
         >
           <motion.div variants={fadeUp} {...(reducedMotion ? {} : hoverGlow)}>
-            <GlowButton
-              type="button"
-              className={styles.controlButton}
-              onClick={startRecording}
-              disabled={isRecording}
-            >
-              Start
-            </GlowButton>
-          </motion.div>
-
-          <motion.div variants={fadeUp}>
-            <button
-              type="button"
-              className={cx(styles.secondaryButton, styles.stopButton)}
-              onClick={() => stopRecording("cancel")}
-              disabled={!isRecording}
-            >
-              Stop
-            </button>
+            <AnimatePresence mode="wait">
+              {isRecording ? (
+                <motion.div key="stop" variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
+                  <GlowButton
+                    type="button"
+                    className={cx(styles.controlButton, styles.stopPrimary)}
+                    onClick={() => stopRecording("cancel")}
+                    disabled={analysisRunning}
+                  >
+                    Stop
+                  </GlowButton>
+                </motion.div>
+              ) : (
+                <motion.div key="start" variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
+                  <GlowButton
+                    type="button"
+                    className={styles.controlButton}
+                    onClick={startRecording}
+                    disabled={analysisRunning}
+                  >
+                    {analysisRunning ? "Busy" : "Start"}
+                  </GlowButton>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
 
           <motion.div variants={fadeUp}>
@@ -1741,20 +2084,9 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
               type="button"
               className={styles.secondaryButton}
               onClick={triggerUploadPicker}
-              disabled={isRecording}
-            >
-              Upload
-            </button>
-          </motion.div>
-
-          <motion.div variants={fadeUp}>
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              onClick={() => void loadDemoSample()}
               disabled={isRecording || analysisRunning}
             >
-              Load Sample
+              {analysisRunning ? "Busy" : "Upload"}
             </button>
           </motion.div>
 
@@ -1769,50 +2101,14 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
             </button>
           </motion.div>
 
-          <motion.div variants={fadeUp} {...(reducedMotion ? {} : hoverGlow)}>
-            <GlowButton
-              type="button"
-              className={styles.controlButton}
-              onClick={handleAnalyze}
-              disabled={!sessionVideo || isRecording || analysisRunning || (!identityReady && !demoMode)}
-            >
-              {analysisRunning ? "Analyzing..." : "Analyze"}
-            </GlowButton>
-          </motion.div>
+          <AnimatePresence>
+            {analysisRunning ? (
+              <motion.div key="analyzing-indicator" variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
+                <Pill className={styles.analyzingControl}>Analyzing...</Pill>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
 
-          <motion.div variants={fadeUp}>
-            <button
-              type="button"
-              className={styles.ghostButton}
-              onClick={handleReset}
-              disabled={isRecording || analysisRunning}
-            >
-              Reset
-            </button>
-          </motion.div>
-
-          <motion.div variants={fadeUp}>
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              onClick={() => router.push("/results")}
-              disabled={!sessionAnalysis || isRecording}
-            >
-              Results
-            </button>
-          </motion.div>
-
-          <motion.div variants={fadeUp}>
-            <button type="button" className={styles.secondaryButton} onClick={() => router.push("/history")}>
-              History
-            </button>
-          </motion.div>
-
-          <motion.div variants={fadeUp}>
-            <button type="button" className={styles.ghostButton} onClick={() => router.push("/")}>
-              Back
-            </button>
-          </motion.div>
         </motion.footer>
 
         <input
@@ -1821,14 +2117,6 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
           accept={UPLOAD_ACCEPT}
           className={styles.fileInput}
           onChange={handleUploadSelected}
-        />
-
-        <input
-          ref={sampleFileInputRef}
-          type="file"
-          accept={UPLOAD_ACCEPT}
-          className={styles.fileInput}
-          onChange={handleDemoSampleSelected}
         />
 
         {demoMode && !demoScript.dismissed ? (
@@ -1841,9 +2129,9 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
             </div>
             <ol className={styles.demoScriptList}>
               <li className={cx(styles.demoStep, demoScript.steps.loadSample && styles.demoStepDone)}>
-                Load sample
+                Upload file
               </li>
-              <li className={cx(styles.demoStep, demoScript.steps.analyze && styles.demoStepDone)}>Analyze</li>
+              <li className={cx(styles.demoStep, demoScript.steps.analyze && styles.demoStepDone)}>Auto analyze</li>
               <li className={cx(styles.demoStep, demoScript.steps.markers && styles.demoStepDone)}>
                 Open explainability markers
               </li>

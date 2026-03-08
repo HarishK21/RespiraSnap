@@ -13,14 +13,13 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
   gap: 0.9rem;
   align-items: stretch;
 }
 
 .leftRail,
-.centerRail,
-.rightRail {
+.centerRail {
   min-height: 0;
 }
 
@@ -148,12 +147,24 @@
   gap: 0.8rem;
 }
 
+.previewHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
 .previewTitle {
   font-size: clamp(1.2rem, 1.7vw, 1.55rem);
 }
 
 .timerPill {
   font-size: 0.74rem;
+}
+
+.analyzingPill {
+  font-size: 0.72rem;
+  border-color: rgba(128, 223, 255, 0.58);
+  box-shadow: 0 0 16px rgba(82, 208, 255, 0.24);
 }
 
 .stageBody {
@@ -167,6 +178,22 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.7rem;
+}
+
+.idleInfo {
+  border: 1px solid rgba(129, 206, 244, 0.3);
+  border-radius: 0.9rem;
+  background: rgba(6, 20, 38, 0.66);
+  color: rgba(202, 232, 248, 0.86);
+  padding: 1rem;
+  display: grid;
+  gap: 0.34rem;
+}
+
+.idleInfo p {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.38;
 }
 
 .chooseCard {
@@ -201,7 +228,7 @@
 .previewFrame {
   position: relative;
   width: 100%;
-  min-height: clamp(150px, 24vh, 220px);
+  min-height: clamp(172px, 28vh, 252px);
   border-radius: 1rem;
   overflow: hidden;
   border: 1px solid rgba(129, 208, 250, 0.28);
@@ -268,59 +295,71 @@
   margin-top: 0.05rem;
 }
 
-.rightRail {
-  position: relative;
-}
-
-.agentsDock {
-  position: relative;
-  height: 100%;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.agentsHandle {
-  border: 1px solid rgba(140, 212, 244, 0.34);
-  border-radius: 999px;
-  background: rgba(6, 18, 33, 0.74);
-  color: rgba(214, 241, 255, 0.92);
-  font-size: 0.74rem;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  padding: 0.62rem 0.72rem;
-  height: fit-content;
-  cursor: pointer;
-}
-
-.agentsPanelWrap {
-  position: absolute;
-  top: 2.6rem;
-  right: 0;
-  width: min(290px, 72vw);
-}
-
-.agentsPanel {
-  padding: 0.86rem;
+.agentsSection {
+  border: 1px solid rgba(134, 213, 246, 0.26);
+  border-radius: 0.96rem;
+  background: rgba(6, 20, 36, 0.66);
+  padding: 0.72rem;
   display: grid;
   gap: 0.62rem;
 }
 
+.agentsHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+
+.agentsHeaderMain {
+  display: grid;
+  gap: 0.3rem;
+}
+
 .agentsTitle {
-  font-size: 0.95rem;
+  font-size: 0.88rem;
+}
+
+.agentsProgressPill {
+  width: fit-content;
+  font-size: 0.67rem;
+}
+
+.agentsProgressRunning {
+  border-color: rgba(128, 223, 255, 0.56);
+  box-shadow: 0 0 14px rgba(94, 212, 255, 0.24);
+}
+
+.agentsProgressDone {
+  border-color: rgba(123, 232, 188, 0.5);
+  color: rgba(208, 250, 229, 0.96);
+}
+
+.agentsCollapseButton {
+  border: 0;
+  background: transparent;
+  color: rgba(170, 214, 236, 0.86);
+  cursor: pointer;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.2rem 0;
+}
+
+.agentsCollapseButton:hover {
+  color: rgba(214, 242, 255, 0.96);
 }
 
 .agentsCopy {
   color: rgba(191, 223, 241, 0.8);
-  font-size: 0.8rem;
-  line-height: 1.42;
+  font-size: 0.74rem;
+  line-height: 1.3;
 }
 
 .agentRows {
   display: grid;
   gap: 0.42rem;
-  max-height: 44vh;
-  overflow: auto;
-  padding-right: 0.1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .agentRow {
@@ -329,9 +368,9 @@
   background: rgba(7, 22, 40, 0.6);
   color: rgba(219, 243, 255, 0.94);
   text-align: left;
-  padding: 0.5rem 0.56rem;
+  padding: 0.52rem 0.58rem;
   display: grid;
-  gap: 0.2rem;
+  gap: 0.32rem;
   cursor: pointer;
 }
 
@@ -355,7 +394,7 @@
 }
 
 .agentTitle {
-  font-size: 0.75rem;
+  font-size: 0.74rem;
   letter-spacing: 0.03em;
 }
 
@@ -367,22 +406,252 @@
 }
 
 .agentStatus {
-  font-size: 0.66rem;
+  font-size: 0.64rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgba(176, 218, 240, 0.8);
+  color: rgba(192, 228, 246, 0.88);
+  border: 1px solid rgba(134, 205, 239, 0.32);
+  border-radius: 999px;
+  padding: 0.14rem 0.38rem;
+  width: fit-content;
 }
 
 .agentSummary {
   font-size: 0.72rem;
-  line-height: 1.32;
+  line-height: 1.25;
   color: rgba(196, 230, 247, 0.86);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .agentMetaRow {
   display: flex;
+  align-items: center;
+  gap: 0.32rem;
+}
+
+.agentStatusRunning {
+  border-color: rgba(126, 221, 255, 0.5);
+  color: rgba(218, 245, 255, 0.96);
+}
+
+.agentStatusDone {
+  border-color: rgba(122, 231, 189, 0.48);
+  color: rgba(208, 250, 230, 0.96);
+}
+
+.agentStatusError {
+  border-color: rgba(246, 163, 163, 0.48);
+  color: rgba(255, 221, 221, 0.96);
+}
+
+.agentProgressTrack {
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(123, 204, 240, 0.24);
+  background: rgba(9, 30, 51, 0.78);
+  overflow: hidden;
+}
+
+.agentProgressFill {
+  display: block;
+  width: 62%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(99, 220, 255, 0.86), rgba(71, 241, 225, 0.84));
+  box-shadow: 0 0 10px rgba(95, 216, 255, 0.42);
+}
+
+.agentFooter {
+  display: flex;
   flex-wrap: wrap;
   gap: 0.38rem;
+}
+
+.analysisProgressCard {
+  margin-top: 0.02rem;
+  padding: 0.82rem;
+  display: grid;
+  gap: 0.62rem;
+}
+
+.analysisProgressHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.56rem;
+}
+
+.analysisProgressTitle {
+  font-size: 0.9rem;
+}
+
+.analysisProgressStatus {
+  font-size: 0.67rem;
+}
+
+.analysisProgressStatusDone {
+  border-color: rgba(125, 232, 190, 0.52);
+  color: rgba(210, 250, 232, 0.96);
+}
+
+.analysisProgressBarBlock {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.analysisProgressLabel {
+  margin: 0;
+  color: rgba(190, 224, 242, 0.82);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.analysisProgressTrack {
+  height: 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(133, 205, 239, 0.28);
+  background: rgba(7, 22, 40, 0.8);
+  overflow: hidden;
+}
+
+.analysisProgressFill {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(84, 211, 255, 0.9), rgba(81, 244, 221, 0.92));
+  box-shadow: 0 0 18px rgba(98, 220, 255, 0.48);
+}
+
+.analysisTimeline {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(118px, 1fr));
+  gap: 0.42rem;
+  overflow-x: auto;
+  padding-bottom: 0.14rem;
+}
+
+.analysisStep {
+  border: 1px solid rgba(127, 195, 225, 0.2);
+  border-radius: 0.72rem;
+  background: rgba(7, 22, 39, 0.58);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.44rem 0.5rem;
+}
+
+.analysisStepDone {
+  border-color: rgba(122, 232, 192, 0.45);
+  background: rgba(8, 34, 42, 0.55);
+  box-shadow: 0 0 14px rgba(98, 219, 182, 0.16);
+}
+
+.analysisStepRunning {
+  border-color: rgba(126, 220, 255, 0.54);
+  box-shadow: 0 0 14px rgba(93, 211, 255, 0.18);
+}
+
+.analysisStepIconWrap {
+  width: 1.34rem;
+  height: 1.34rem;
+  border-radius: 999px;
+  border: 1px solid rgba(126, 197, 230, 0.32);
+  background: rgba(8, 24, 41, 0.78);
+  color: rgba(164, 206, 230, 0.82);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.analysisStepDone .analysisStepIconWrap {
+  border-color: rgba(124, 232, 192, 0.54);
+  color: rgba(189, 247, 223, 0.96);
+  box-shadow: 0 0 10px rgba(99, 221, 183, 0.28);
+}
+
+.analysisStepRunning .analysisStepIconWrap {
+  border-color: rgba(122, 219, 255, 0.58);
+  color: rgba(214, 244, 255, 0.96);
+  animation: stepPulse 1.35s ease-in-out infinite;
+}
+
+.progressStepIcon {
+  width: 0.76rem;
+  height: 0.76rem;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.analysisStepName {
+  color: rgba(191, 222, 240, 0.84);
+  font-size: 0.67rem;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+
+.analysisStepDone .analysisStepName {
+  color: rgba(212, 247, 232, 0.96);
+}
+
+.analysisStepRunning .analysisStepName {
+  color: rgba(219, 244, 255, 0.96);
+}
+
+.livePillarsRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.42rem;
+}
+
+.livePillarCard {
+  border: 1px solid rgba(126, 196, 229, 0.24);
+  border-radius: 0.72rem;
+  background: rgba(7, 21, 37, 0.6);
+  padding: 0.44rem 0.5rem;
+  display: grid;
+  gap: 0.16rem;
+  align-content: start;
+}
+
+.livePillarLabel {
+  color: rgba(175, 214, 236, 0.8);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.livePillarValue {
+  color: rgba(227, 246, 255, 0.98);
+  font-size: clamp(0.86rem, 1.2vw, 1rem);
+  line-height: 1.12;
+}
+
+.analysisResultsCta {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.analysisProgressReducedMotion .analysisStepRunning .analysisStepIconWrap {
+  animation: none;
+}
+
+@keyframes stepPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 8px rgba(90, 206, 255, 0.16);
+  }
+  50% {
+    box-shadow: 0 0 14px rgba(90, 206, 255, 0.38);
+  }
 }
 
 .controlBar {
@@ -396,6 +665,18 @@
 
 .controlButton {
   min-width: 104px;
+}
+
+.stopPrimary {
+  border-color: rgba(239, 162, 162, 0.58);
+  box-shadow: 0 0 20px rgba(232, 110, 110, 0.26);
+}
+
+.analyzingControl {
+  font-size: 0.74rem;
+  border-color: rgba(126, 220, 255, 0.54);
+  color: rgba(222, 246, 255, 0.95);
+  box-shadow: 0 0 14px rgba(93, 210, 255, 0.2);
 }
 
 .secondaryButton,
@@ -417,15 +698,6 @@
 
 .secondaryButton:hover:not(:disabled) {
   border-color: rgba(171, 234, 255, 0.58);
-}
-
-.stopButton {
-  border-color: rgba(226, 171, 171, 0.34);
-  color: rgba(253, 216, 216, 0.9);
-}
-
-.stopButton:hover:not(:disabled) {
-  border-color: rgba(245, 186, 186, 0.6);
 }
 
 .ghostButton {
@@ -526,19 +798,6 @@
   .layout {
     grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   }
-
-  .rightRail {
-    grid-column: 1 / -1;
-  }
-
-  .agentsDock {
-    justify-content: flex-start;
-  }
-
-  .agentsPanelWrap {
-    left: 0;
-    right: auto;
-  }
 }
 
 @media (max-width: 920px) {
@@ -556,6 +815,14 @@
 
   .previewFrame {
     min-height: clamp(132px, 22vh, 180px);
+  }
+
+  .agentRows {
+    grid-template-columns: 1fr;
+  }
+
+  .livePillarsRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .controlBar {

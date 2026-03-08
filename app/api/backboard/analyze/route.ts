@@ -28,6 +28,35 @@ type AnalyzeRequestBody = {
     };
     markers?: Array<{ time: number; label: string }>;
   };
+  historyContext?: {
+    sessions?: Array<{
+      createdAt?: string;
+      score?: number;
+      confidence?: "low" | "med" | "high" | string;
+      quality?: "Good" | "Fair" | "Poor" | "Noisy" | string;
+      pillars?: {
+        rhythmLabel?: string;
+        exhaleRatio?: number | null;
+        interruptions?: number;
+        holdDetected?: boolean | null;
+      };
+    }>;
+  };
+};
+
+type TrendLabel = "Improving" | "Stable" | "Worsening" | "Baseline building";
+
+type PriorSessionContext = {
+  createdAt: string;
+  score: number;
+  confidence: "low" | "med" | "high";
+  quality: "Good" | "Fair" | "Poor" | "Noisy";
+  pillars: {
+    rhythmLabel: string;
+    exhaleRatio: number | null;
+    interruptions: number | null;
+    holdDetected: boolean | null;
+  };
 };
 
 type AgentStep = {
@@ -86,6 +115,130 @@ function confidenceFromSamples(sampleCount: number): "low" | "med" | "high" {
   if (sampleCount >= 8) return "high";
   if (sampleCount >= 3) return "med";
   return "low";
+}
+
+function parseConfidence(value: unknown, fallback: "low" | "med" | "high") {
+  const normalized = safeString(value).toLowerCase();
+  if (normalized === "low" || normalized === "med" || normalized === "high") return normalized;
+  return fallback;
+}
+
+function median(values: number[]) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) return (sorted[middle - 1] + sorted[middle]) / 2;
+  return sorted[middle];
+}
+
+function trendLabelFromDelta(totalSessions: number, delta: number): TrendLabel {
+  if (totalSessions < 3) return "Baseline building";
+  if (delta >= 4) return "Improving";
+  if (delta <= -4) return "Worsening";
+  return "Stable";
+}
+
+function normalizeTrendLabel(value: unknown, fallback: TrendLabel): TrendLabel {
+  const normalized = safeString(value).toLowerCase();
+  if (normalized === "improving") return "Improving";
+  if (normalized === "stable") return "Stable";
+  if (normalized === "worsening") return "Worsening";
+  if (normalized === "baseline building") return "Baseline building";
+  return fallback;
+}
+
+function parseDeltaValue(value: unknown, fallback: number) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.round(value);
+  }
+
+  const text = safeString(value);
+  if (!text) return fallback;
+  const match = text.match(/[-+]?\d+/);
+  if (!match) return fallback;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? Math.round(parsed) : fallback;
+}
+
+function sanitizeHistoryContext(sessions: unknown): PriorSessionContext[] {
+  if (!Array.isArray(sessions)) return [];
+
+  const parsed = sessions
+    .map((entry) => {
+      if (!isObject(entry)) return null;
+
+      const createdAt = safeString(entry.createdAt, new Date().toISOString());
+      const score = clamp(Math.round(safeNumber(entry.score, NaN)), 0, 100);
+      if (!Number.isFinite(score)) return null;
+
+      const confidence = parseConfidence(entry.confidence, "low");
+      const qualityRaw = safeString(entry.quality, "Good");
+      const quality: PriorSessionContext["quality"] =
+        qualityRaw === "Fair" || qualityRaw === "Poor" || qualityRaw === "Noisy" ? qualityRaw : "Good";
+      const pillars = isObject(entry.pillars) ? entry.pillars : {};
+
+      return {
+        createdAt,
+        score,
+        confidence,
+        quality,
+        pillars: {
+          rhythmLabel: safeString(pillars.rhythmLabel, "Unknown"),
+          exhaleRatio:
+            typeof pillars.exhaleRatio === "number" && Number.isFinite(pillars.exhaleRatio)
+              ? Number(pillars.exhaleRatio.toFixed(3))
+              : null,
+          interruptions:
+            typeof pillars.interruptions === "number" && Number.isFinite(pillars.interruptions)
+              ? Math.max(0, Math.floor(pillars.interruptions))
+              : null,
+          holdDetected:
+            typeof pillars.holdDetected === "boolean" || pillars.holdDetected === null ? pillars.holdDetected : null
+        }
+      } satisfies PriorSessionContext;
+    })
+    .filter((entry): entry is PriorSessionContext => !!entry)
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+
+  return parsed.slice(0, 4);
+}
+
+function summarizeCurrentPillars(segmentation: unknown) {
+  if (!isObject(segmentation)) {
+    return {
+      rhythmLabel: "Unknown",
+      exhaleRatio: null as number | null,
+      interruptions: null as number | null,
+      holdDetected: null as boolean | null
+    };
+  }
+
+  let inhaleDuration = 0;
+  let exhaleDuration = 0;
+  let holdDuration = 0;
+
+  const segments = Array.isArray(segmentation.segments) ? segmentation.segments : [];
+  segments.forEach((segment) => {
+    if (!isObject(segment)) return;
+    const start = safeNumber(segment.start, NaN);
+    const end = safeNumber(segment.end, NaN);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    const duration = end - start;
+    const label = safeString(segment.label).toLowerCase();
+    if (label.includes("inhale")) inhaleDuration += duration;
+    if (label.includes("exhale")) exhaleDuration += duration;
+    if (label.includes("hold")) holdDuration += duration;
+  });
+
+  const irregularCount = Array.isArray(segmentation.irregularWindows) ? segmentation.irregularWindows.length : 0;
+  const rhythmLabel = irregularCount <= 1 ? "Stable" : irregularCount <= 3 ? "Slightly Variable" : "Variable";
+
+  return {
+    rhythmLabel,
+    exhaleRatio: inhaleDuration > 0 ? Number((exhaleDuration / inhaleDuration).toFixed(3)) : null,
+    interruptions: Number.isFinite(irregularCount) ? irregularCount : null,
+    holdDetected: holdDuration > 0.3 ? true : holdDuration >= 0 ? false : null
+  };
 }
 
 function computeSnapshotScore(
@@ -187,6 +340,13 @@ function buildBaselinePrompt(input: {
   currentStats: NonNullable<AnalyzeRequestBody["features"]>["stats"];
   segmentation: unknown;
   sampleCount: number;
+  recentSessions: PriorSessionContext[];
+  currentPillars: {
+    rhythmLabel: string;
+    exhaleRatio: number | null;
+    interruptions: number | null;
+    holdDetected: boolean | null;
+  };
 }) {
   return `
 You are the Baseline & Trend Agent for RespiraSnap.
@@ -194,15 +354,20 @@ Use conversation memory for this assistant to compare current breathing pattern 
 
 Return STRICT JSON only:
 {
+  "trendLabel": "Improving|Stable|Worsening|Baseline building",
+  "deltaValue": 0,
   "baselineDelta": "string",
   "confidence": "low|med|high",
   "samplesUsed": 0,
-  "trendNote": "string"
+  "trendReason": "string",
+  "pillarDeltaSummary": "string"
 }
 
 Rules:
 - Confidence must consider number of samples.
 - Mention if history is limited.
+- Keep trendReason <= 12 words.
+- Use only rhythm/exhale ratio/interruptions/hold wording.
 - Keep it non-diagnostic.
 
 Context:
@@ -210,6 +375,8 @@ Context:
 - mode: ${input.mode}
 - currentStats: ${JSON.stringify(input.currentStats ?? {})}
 - segmentation: ${JSON.stringify(input.segmentation ?? {})}
+- currentPillars: ${JSON.stringify(input.currentPillars)}
+- recentSessions(last ${input.recentSessions.length}): ${JSON.stringify(input.recentSessions)}
 - observedSampleCountIncludingCurrent: ${input.sampleCount}
 `.trim();
 }
@@ -391,6 +558,7 @@ export async function POST(request: Request) {
   };
 
   const mode = safeString(payload.mode, "breathing");
+  const recentSessions = sanitizeHistoryContext(payload.historyContext?.sessions);
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -524,18 +692,40 @@ export async function POST(request: Request) {
                 mode,
                 currentStats: features.stats,
                 segmentation: results.segmentation,
-                sampleCount: samplesForDevice
+                sampleCount: samplesForDevice,
+                recentSessions,
+                currentPillars: summarizeCurrentPillars(results.segmentation)
               }),
             (parsed) => {
-              const baselineDelta = safeString(parsed?.baselineDelta, "No baseline comparison available yet.");
-              const trendNote = safeString(parsed?.trendNote, "Collect more samples to improve trend quality.");
-              const confidence = confidenceFromSamples(samplesForDevice);
+              const currentScore = computeSnapshotScore(features.stats, results.segmentation);
+              const comparedScores = recentSessions.map((session) => session.score).slice(0, 4);
+              const comparedCount = comparedScores.length;
+              const baselineMedian = comparedCount ? median(comparedScores) : currentScore;
+              const fallbackDeltaValue = Math.round(currentScore - baselineMedian);
+              const parsedDeltaValue = parseDeltaValue(parsed?.deltaValue ?? parsed?.baselineDelta, fallbackDeltaValue);
+              const totalSamples = Math.max(samplesForDevice, comparedCount + 1);
+              const fallbackTrend = trendLabelFromDelta(totalSamples, parsedDeltaValue);
+              const trendLabel = normalizeTrendLabel(parsed?.trendLabel, fallbackTrend);
+              const baselineDelta = safeString(
+                parsed?.baselineDelta,
+                `${parsedDeltaValue >= 0 ? "+" : ""}${parsedDeltaValue} vs baseline`
+              );
+              const trendReason = safeString(
+                parsed?.trendReason,
+                safeString(parsed?.trendNote, "Collect more sessions for stronger trend confidence.")
+              );
+              const confidence = parseConfidence(parsed?.confidence, confidenceFromSamples(totalSamples));
+              const pillarDeltaSummary = safeString(parsed?.pillarDeltaSummary);
 
               return {
+                trendLabel,
+                deltaValue: parsedDeltaValue,
                 baselineDelta,
                 confidence,
-                samplesUsed: samplesForDevice,
-                trendNote
+                samplesUsed: totalSamples,
+                trendReason,
+                trendNote: trendReason,
+                pillarDeltaSummary
               };
             }
           );
@@ -587,6 +777,7 @@ export async function POST(request: Request) {
           const followUpResult = isObject(results.followUp) ? results.followUp : {};
           const segmentationResult = isObject(results.segmentation) ? results.segmentation : {};
           const snapshotScore = computeSnapshotScore(features.stats, segmentationResult);
+          const currentPillars = summarizeCurrentPillars(segmentationResult);
 
           await client.addMemory(assistantId, {
             content: JSON.stringify({
@@ -598,10 +789,15 @@ export async function POST(request: Request) {
               duration: session.duration,
               score: snapshotScore,
               baselineDelta: safeString(baselineResult.baselineDelta, "Baseline pending"),
+              trendLabel: safeString(baselineResult.trendLabel, "Baseline building"),
+              deltaValue: safeNumber(baselineResult.deltaValue, 0),
               confidence: safeString(baselineResult.confidence, confidenceFromSamples(samplesForDevice)),
+              trendReason: safeString(baselineResult.trendReason, safeString(baselineResult.trendNote)),
+              pillarDeltaSummary: safeString(baselineResult.pillarDeltaSummary),
               clinicianSummary: safeString(clinicalResult.summary),
               coachingTip: safeString(coachingResult.microIntervention),
               followUpPrompt: safeString(followUpResult.nextWeekPrompt),
+              pillars: currentPillars,
               featureStats: features.stats,
               envelope: features.envelope.slice(0, 64)
             }),

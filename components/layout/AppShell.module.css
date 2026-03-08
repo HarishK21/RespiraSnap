@@ -55,10 +55,21 @@
 }
 
 .settingsPanelWrap {
-  position: absolute;
-  top: calc(100% + 0.5rem);
-  right: 0;
+  position: fixed;
+  z-index: 9999;
   width: min(300px, 78vw);
+  pointer-events: auto;
+}
+
+.settingsOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: rgba(3, 11, 22, 0.06);
+  cursor: default;
 }
 
 .settingsPanel {

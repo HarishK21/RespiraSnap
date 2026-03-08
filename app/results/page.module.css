@@ -41,6 +41,56 @@
     0 0 62px rgba(69, 138, 182, 0.28);
 }
 
+.trendRow {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.trendLabel {
+  color: rgba(177, 213, 233, 0.82);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.trendValueRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  align-items: center;
+}
+
+.trendPill {
+  font-size: 0.72rem;
+}
+
+.trend-improving {
+  border-color: rgba(123, 236, 198, 0.55);
+  color: rgba(202, 251, 230, 0.96);
+  box-shadow: 0 0 12px rgba(86, 220, 181, 0.2);
+}
+
+.trend-stable {
+  border-color: rgba(135, 194, 240, 0.54);
+  color: rgba(211, 237, 255, 0.95);
+}
+
+.trend-worsening {
+  border-color: rgba(246, 171, 133, 0.52);
+  color: rgba(255, 221, 194, 0.96);
+  box-shadow: 0 0 10px rgba(225, 142, 96, 0.16);
+}
+
+.trend-baseline-building {
+  border-color: rgba(146, 185, 228, 0.48);
+  color: rgba(201, 226, 245, 0.92);
+}
+
+.trendDelta {
+  font-size: 0.75rem;
+  color: rgba(203, 233, 249, 0.9);
+}
+
 .scoreMeta {
   display: flex;
   flex-wrap: wrap;
@@ -69,6 +119,21 @@
 .noisyPill {
   border-color: rgba(255, 194, 125, 0.52);
   color: rgba(255, 224, 188, 0.95);
+}
+
+.trendHint {
+  margin: 0;
+  color: rgba(184, 219, 239, 0.82);
+  font-size: 0.72rem;
+}
+
+.trendReason {
+  margin: 0;
+  color: rgba(176, 213, 234, 0.76);
+  font-size: 0.7rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .scoreHint {
@@ -144,18 +209,7 @@
 
 .pillarsSection {
   display: grid;
-  gap: 0.58rem;
-}
-
-.pillarsTop {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-.pillarsTitle {
-  font-size: 1rem;
+  gap: 0.42rem;
 }
 
 .pillarGrid {
@@ -221,13 +275,13 @@
 
 .tileColumn {
   display: grid;
-  gap: 0.68rem;
+  gap: 0.56rem;
 }
 
 .tile {
-  padding: 0.86rem;
+  padding: 0.82rem;
   display: grid;
-  gap: 0.5rem;
+  gap: 0.42rem;
 }
 
 .tileHead {
@@ -257,24 +311,11 @@
 
 .tileBody {
   display: grid;
-  gap: 0.58rem;
-}
-
-.bulletList {
-  margin: 0;
-  padding-left: 1.1rem;
-  display: grid;
-  gap: 0.3rem;
-}
-
-.bulletList li {
-  color: rgba(210, 236, 249, 0.92);
-  font-size: 0.84rem;
-  line-height: 1.4;
+  gap: 0.5rem;
 }
 
 .waveform {
-  margin-top: 0.1rem;
+  margin-top: 0;
 }
 
 .markerTooltip {
@@ -324,45 +365,6 @@
 
 .legendHold {
   background: rgba(159, 173, 255, 0.9);
-}
-
-.tileDivider {
-  margin: 0.15rem 0;
-}
-
-.densityWrap {
-  display: grid;
-  gap: 0.38rem;
-}
-
-.densityLabel {
-  margin: 0;
-  color: rgba(187, 221, 240, 0.84);
-  font-size: 0.72rem;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.densityBars {
-  height: 48px;
-  display: flex;
-  align-items: flex-end;
-  gap: 0.2rem;
-}
-
-.densityBar {
-  flex: 1;
-  min-width: 0;
-  border: 1px solid rgba(133, 209, 246, 0.3);
-  border-radius: 0.3rem 0.3rem 0.2rem 0.2rem;
-  background: linear-gradient(180deg, rgba(89, 221, 249, 0.86), rgba(37, 128, 171, 0.7));
-  cursor: pointer;
-  transition: transform 150ms ease, border-color 150ms ease;
-}
-
-.densityBar:hover {
-  transform: translateY(-1px);
-  border-color: rgba(164, 230, 255, 0.58);
 }
 
 .debugWrap {
@@ -687,11 +689,6 @@
   .emptyActions > *,
   .footerActions > * {
     flex: 1 1 100%;
-  }
-
-  .pillarsTop {
-    align-items: flex-start;
-    flex-direction: column;
   }
 
   .pillarGrid {
