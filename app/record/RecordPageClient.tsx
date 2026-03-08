@@ -12,6 +12,7 @@ import { useSessionAnalysis } from "@/hooks/useSessionAnalysis";
 import { useSessionVideo } from "@/hooks/useSessionVideo";
 import { appendAnalysisHistory, buildSessionAnalysisBundle } from "@/lib/analysisBundle";
 import { extractAudioFeatureTimeline, type AudioFeatureTimeline } from "@/lib/audioFeatures";
+import { clearCurrentSession } from "@/lib/currentSession";
 import { archiveVideoBlob } from "@/lib/videoArchive";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { useRouter } from "next/navigation";
@@ -44,6 +45,7 @@ type AgentStatus = "queued" | "running" | "done" | "error";
 type AgentKey = "segmentation" | "baselineTrend" | "clinicalSummary" | "coaching" | "followUp";
 type ProgressStepKey = "signal" | "segmentation" | "baselineTrend" | "clinicalSummary" | "coaching";
 type ProgressStepStatus = "queued" | "running" | "done";
+type AnalysisStatus = "idle" | "ready" | "running" | "complete" | "error";
 
 type BreathingCue = {
   atMs: number;
@@ -452,7 +454,8 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const [statusMessage, setStatusMessage] = useState("Choose Record or Upload to begin.");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [coachMessage, setCoachMessage] = useState<string | null>(null);
-  const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>(sessionVideo ? "ready" : "idle");
+  const [analysisSource, setAnalysisSource] = useState<"live" | "demo" | null>(null);
   const [agentsExpanded, setAgentsExpanded] = useState(false);
 
   const [waveformData, setWaveformData] = useState<AudioFeatureTimeline | null>(null);
@@ -466,16 +469,15 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
 
-  const [analysisRunning, setAnalysisRunning] = useState(false);
   const [analysisResults, setAnalysisResults] = useState<Record<string, unknown> | null>(null);
   const [agentStates, setAgentStates] = useState<AgentState[]>(() => createInitialAgentState());
   const [agentOutputs, setAgentOutputs] = useState<Partial<Record<AgentKey, unknown>>>({});
-  const [autoAnalyzedSessionId, setAutoAnalyzedSessionId] = useState<number | null>(null);
+  const [analysisQueuedSessionId, setAnalysisQueuedSessionId] = useState<number | null>(null);
 
   const videoRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const agentsSectionRef = useRef<HTMLDivElement>(null);
-  const wasAnalyzingRef = useRef(false);
+  const analysisRunIdRef = useRef(0);
 
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -496,7 +498,16 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const liveEnvelopeRef = useRef<number[]>([]);
   const liveEnergyRef = useRef<number[]>([]);
 
-  const flowStep = analysisRunning || sessionAnalysis || analysisResults ? 3 : sessionVideo || inputMode ? 2 : 1;
+  const isAnalysisRunning = analysisStatus === "running";
+  const isAnalysisComplete = analysisStatus === "complete";
+  const isAnalysisError = analysisStatus === "error";
+
+  const flowStep =
+    isAnalysisRunning || isAnalysisComplete || isAnalysisError
+      ? 3
+      : sessionVideo || inputMode
+        ? 2
+        : 1;
   const progressPercent = ((CAPTURE_SECONDS - secondsLeft) / CAPTURE_SECONDS) * 100;
 
   const playbackCurrentTime = isRecording ? CAPTURE_SECONDS - secondsLeft : videoCurrentTime;
@@ -557,11 +568,11 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
   const agentProgress = useMemo(() => {
     const total = agentStates.length;
-    const done = agentStates.filter((agent) => agent.status === "done").length;
-    const running = agentStates.filter((agent) => agent.status === "running").length;
-    const errors = agentStates.filter((agent) => agent.status === "error").length;
+    const doneCount = agentStates.filter((agent) => agent.status === "done").length;
+    const runningCount = agentStates.filter((agent) => agent.status === "running").length;
+    const errorCount = agentStates.filter((agent) => agent.status === "error").length;
 
-    return { total, done, running, errors };
+    return { total, doneCount, runningCount, errorCount };
   }, [agentStates]);
 
   const timelineSteps = useMemo(() => {
@@ -577,7 +588,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
           waveformError ||
           displayedEnvelope.length > 0 ||
           displayedEnergy.length > 0 ||
-          analysisRunning ||
+          isAnalysisRunning ||
           analysisResults ||
           sessionAnalysis)
     );
@@ -586,7 +597,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       if (step.key === "signal") {
         return {
           ...step,
-          status: signalReady ? "done" : analysisRunning ? "running" : "queued"
+          status: signalReady ? "done" : isAnalysisRunning ? "running" : "queued"
         } satisfies ProgressStepConfig & { status: ProgressStepStatus };
       }
 
@@ -605,43 +616,49 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   }, [
     agentStates,
     analysisResults,
-    analysisRunning,
     displayedEnergy.length,
     displayedEnvelope.length,
+    isAnalysisRunning,
     sessionAnalysis,
     sessionVideo,
     waveformData,
     waveformError
   ]);
 
-  const progressDoneCount = useMemo(
-    () => timelineSteps.filter((step) => step.status === "done").length,
-    [timelineSteps]
-  );
-  const progressRunningCount = useMemo(
-    () => timelineSteps.filter((step) => step.status === "running").length,
-    [timelineSteps]
-  );
-
-  const analysisComplete = useMemo(
-    () => !analysisRunning && progressDoneCount === PROGRESS_STEPS.length && Boolean(sessionAnalysis || analysisResults),
-    [analysisResults, analysisRunning, progressDoneCount, sessionAnalysis]
-  );
+  const finalResultsReady = useMemo(() => {
+    if (!sessionAnalysis) return false;
+    if (!Number.isFinite(sessionAnalysis.score)) return false;
+    if (!sessionAnalysis.reportText?.trim()) return false;
+    if (!sessionAnalysis.pillars) return false;
+    return true;
+  }, [sessionAnalysis]);
 
   const progressFraction = useMemo(() => {
-    if (analysisComplete) return 1;
+    if (analysisStatus === "complete") return 1;
+    if (analysisStatus === "error") return clamp(agentProgress.doneCount / Math.max(1, agentProgress.total), 0, 1);
+    if (analysisStatus === "ready") return 0;
 
-    const base = progressDoneCount / PROGRESS_STEPS.length;
-    if (analysisRunning && progressRunningCount > 0) {
-      return clamp(base + 0.45 / PROGRESS_STEPS.length, 0, 0.98);
+    const base = agentProgress.doneCount / Math.max(1, agentProgress.total);
+    if (analysisStatus === "running" && agentProgress.runningCount > 0) {
+      return clamp(base + 0.45 / Math.max(1, agentProgress.total), 0, 0.98);
     }
 
     return clamp(base, 0, 1);
-  }, [analysisComplete, analysisRunning, progressDoneCount, progressRunningCount]);
+  }, [agentProgress.doneCount, agentProgress.runningCount, agentProgress.total, analysisStatus]);
 
-  const progressLabel = analysisComplete
-    ? "Analysis complete"
-    : `Analyzing... ${progressDoneCount}/${PROGRESS_STEPS.length}`;
+  const progressLabel = useMemo(() => {
+    if (analysisStatus === "running") return `Analyzing... ${agentProgress.doneCount}/${agentProgress.total}`;
+    if (analysisStatus === "complete") return "Complete";
+    if (analysisStatus === "error") return "Error";
+    if (analysisStatus === "ready") return "Ready";
+    return "Idle";
+  }, [agentProgress.doneCount, agentProgress.total, analysisStatus]);
+
+  const pipelineCompleteMessage = useMemo(() => {
+    if (analysisStatus !== "complete") return null;
+    if (analysisSource === "demo") return "Demo pipeline complete.";
+    return "Backboard pipeline complete.";
+  }, [analysisSource, analysisStatus]);
 
   const livePillars = useMemo(() => {
     if (sessionAnalysis?.pillars) {
@@ -762,6 +779,27 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       );
     },
     []
+  );
+
+  const isRunCurrent = useCallback((runId: number) => analysisRunIdRef.current === runId, []);
+
+  const beginAnalysisRun = useCallback(
+    (source: "live" | "demo") => {
+      const runId = analysisRunIdRef.current + 1;
+      analysisRunIdRef.current = runId;
+
+      setAgentsExpanded(true);
+      setAnalysisStatus("running");
+      setAnalysisSource(source);
+      setAnalysisResults(null);
+      setSessionAnalysis(null);
+      setErrorMessage(null);
+      setAgentStates(createInitialAgentState());
+      setAgentOutputs({});
+
+      return runId;
+    },
+    [setSessionAnalysis]
   );
 
   const stopMediaTracks = useCallback(() => {
@@ -978,15 +1016,18 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       }
 
       const objectUrl = URL.createObjectURL(recordedBlob);
+      const createdAt = Date.now();
       setSessionVideo({
         blob: recordedBlob,
         url: objectUrl,
         source: "record",
-        createdAt: Date.now()
+        createdAt
       });
+      setAnalysisQueuedSessionId(createdAt);
+      setAnalysisStatus("ready");
+      setAnalysisSource(null);
 
       setStatusMessage("Recording complete. Preparing analysis...");
-      setAnalysisMessage(null);
       setErrorMessage(null);
     },
     [clearRecordingTimers, setSessionVideo, stopLiveWaveform, stopMediaTracks, stopVoiceCoach]
@@ -1023,8 +1064,9 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
     setInputMode("record");
     setErrorMessage(null);
-    setAnalysisMessage(null);
     setAnalysisResults(null);
+    setAnalysisStatus("idle");
+    setAnalysisSource(null);
     setAgentStates(createInitialAgentState());
     setAgentOutputs({});
     clearSessionAnalysis();
@@ -1033,7 +1075,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     setWaveformData(null);
     setVideoCurrentTime(0);
     setVideoDuration(0);
-    setAutoAnalyzedSessionId(null);
+    setAnalysisQueuedSessionId(null);
     setStatusMessage("Requesting microphone access...");
 
     try {
@@ -1115,23 +1157,25 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       }
 
       const objectUrl = URL.createObjectURL(file);
+      const createdAt = Date.now();
       setSessionVideo({
         blob: file,
         url: objectUrl,
         source: "upload",
         fileName: file.name,
-        createdAt: Date.now()
+        createdAt
       });
+      setAnalysisQueuedSessionId(createdAt);
 
       setWaveformData(null);
       setWaveformError(null);
       setVideoCurrentTime(0);
       setVideoDuration(0);
-      setAutoAnalyzedSessionId(null);
       setInputMode("upload");
       setStatusMessage("Uploaded audio loaded. Preparing analysis...");
-      setAnalysisMessage(null);
       setAnalysisResults(null);
+      setAnalysisStatus("ready");
+      setAnalysisSource(null);
       setAgentStates(createInitialAgentState());
       setAgentOutputs({});
       clearSessionAnalysis();
@@ -1175,8 +1219,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   const commitAnalysisResults = useCallback(
     (
       results: Record<string, unknown>,
-      fallbackWaveform: { envelope: number[]; energy: number[]; duration: number },
-      context: "live" | "demo"
+      fallbackWaveform: { envelope: number[]; energy: number[]; duration: number }
     ) => {
       setAnalysisResults(results);
       const analysisBundle = buildSessionAnalysisBundle({
@@ -1223,8 +1266,6 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       if (demoMode) {
         demoScript.completeStep("analyze");
       }
-
-      setAnalysisMessage(context === "demo" ? "Demo pipeline complete." : "Backboard pipeline complete.");
       setStatusMessage("Analysis complete. Open Results to review your breathing snapshot.");
     },
     [
@@ -1252,22 +1293,19 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       const stepDelay = reducedMotion ? 45 : 360;
       const results = buildDemoAgentResults();
 
-      setAgentsExpanded(true);
-      setAnalysisRunning(true);
-      setAnalysisResults(null);
-      setSessionAnalysis(null);
-      setAnalysisMessage("Demo multi-agent pipeline running...");
-      setErrorMessage(null);
-      setAgentStates(createInitialAgentState());
-      setAgentOutputs({});
+      const runId = beginAnalysisRun("demo");
+      setStatusMessage(`Analyzing... 0/${AGENT_BLUEPRINT.length}`);
 
       try {
         for (const agent of AGENT_BLUEPRINT) {
+          if (!isRunCurrent(runId)) return;
+
           updateAgentState(agent.key, {
             status: "running",
             summary: "Running"
           });
           await wait(stepDelay);
+          if (!isRunCurrent(runId)) return;
 
           const output =
             (isObject(results[agent.key]) ? (results[agent.key] as Record<string, unknown>) : { ok: true }) ?? {
@@ -1285,20 +1323,22 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
           });
           await wait(Math.max(20, Math.floor(stepDelay / 2)));
         }
+        if (!isRunCurrent(runId)) return;
 
-        commitAnalysisResults(results, fallbackWaveform, "demo");
+        commitAnalysisResults(results, fallbackWaveform);
+        setAnalysisQueuedSessionId(null);
       } catch {
+        if (!isRunCurrent(runId)) return;
         setErrorMessage("Demo pipeline failed unexpectedly.");
-        setAnalysisMessage(null);
-      } finally {
-        setAnalysisRunning(false);
+        setAnalysisStatus("error");
+        setStatusMessage("Analysis failed. Capture another sample to retry.");
       }
     },
-    [commitAnalysisResults, reducedMotion, setSessionAnalysis, updateAgentState]
+    [beginAnalysisRun, commitAnalysisResults, isRunCurrent, reducedMotion, updateAgentState]
   );
 
   const runAnalysis = useCallback(async () => {
-    if (!sessionVideo || isRecording || analysisRunning || (!identityReady && !demoMode)) return;
+    if (!sessionVideo || isRecording || analysisStatus !== "ready" || (!identityReady && !demoMode)) return;
 
     const envelopeForPipeline = downsample(waveformData?.envelope ?? displayedEnvelope, 96);
     const energyForPipeline = downsample(waveformData?.energy ?? displayedEnergy, 96);
@@ -1325,14 +1365,8 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
       return;
     }
 
-    setAgentsExpanded(true);
-    setAnalysisRunning(true);
-    setAnalysisResults(null);
-    setSessionAnalysis(null);
-    setAnalysisMessage("Backboard multi-agent pipeline running...");
-    setErrorMessage(null);
-    setAgentStates(createInitialAgentState());
-    setAgentOutputs({});
+    const runId = beginAnalysisRun("live");
+    setStatusMessage(`Analyzing... 0/${AGENT_BLUEPRINT.length}`);
 
     try {
       const response = await fetch("/api/backboard/analyze", {
@@ -1384,12 +1418,16 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
         }
         throw new Error(detail);
       }
+      if (!isRunCurrent(runId)) return;
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let runHadError = false;
 
       const processEvent = (event: AnalyzeEvent) => {
+        if (!isRunCurrent(runId)) return;
+
         if (event.type === "init") {
           setBackboardContext({ assistantId: event.assistantId, threadId: event.threadId });
           return;
@@ -1415,26 +1453,45 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                     ? "Error"
                     : "Queued"
           });
+          if (event.status === "error") {
+            runHadError = true;
+            setAnalysisStatus("error");
+            setStatusMessage("Analysis failed. Capture another sample to retry.");
+          }
           return;
         }
 
         if (event.type === "complete") {
+          if (runHadError) {
+            setAnalysisStatus("error");
+            return;
+          }
           setBackboardContext({ assistantId: event.assistantId, threadId: event.threadId });
           setAgentOutputs(event.results as Partial<Record<AgentKey, unknown>>);
+          setAgentStates((previous) =>
+            previous.map((agent) => ({
+              ...agent,
+              status: agent.status === "error" ? "error" : "done",
+              summary: agent.status === "error" ? agent.summary : "Done"
+            }))
+          );
           commitAnalysisResults(
             event.results,
             {
               envelope: envelopeForPipeline,
               energy: energyForPipeline,
               duration: waveformDuration || CAPTURE_SECONDS
-            },
-            "live"
+            }
           );
+          setAnalysisQueuedSessionId(null);
           return;
         }
 
         if (event.type === "fatal") {
+          runHadError = true;
           setErrorMessage(event.message);
+          setAnalysisStatus("error");
+          setStatusMessage("Analysis failed. Capture another sample to retry.");
         }
       };
 
@@ -1469,14 +1526,15 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
         }
       }
     } catch (error) {
+      if (!isRunCurrent(runId)) return;
       setErrorMessage(error instanceof Error ? error.message : "Backboard analysis failed.");
-      setAnalysisMessage(null);
-    } finally {
-      setAnalysisRunning(false);
+      setAnalysisStatus("error");
+      setStatusMessage("Analysis failed. Capture another sample to retry.");
     }
   }, [
-    analysisRunning,
+    analysisStatus,
     assistantId,
+    beginAnalysisRun,
     commitAnalysisResults,
     deviceId,
     demoMode,
@@ -1485,12 +1543,12 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     eventMarkers,
     identityReady,
     isRecording,
+    isRunCurrent,
     mode,
     reducedMotion,
     runDemoPipeline,
     sessionVideo,
     setBackboardContext,
-    setSessionAnalysis,
     sessionSnapshots,
     threadId,
     updateAgentState,
@@ -1582,6 +1640,10 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
         if (cancelled) return;
         setWaveformData(null);
         setWaveformError("Unable to decode this audio file. Waveform unavailable.");
+        if (analysisStatus === "ready") {
+          setAnalysisStatus("error");
+          setStatusMessage("Analysis failed. Capture another sample to retry.");
+        }
       })
       .finally(() => {
         if (cancelled) return;
@@ -1591,29 +1653,58 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
     return () => {
       cancelled = true;
     };
-  }, [isRecording, sessionVideo?.createdAt, sessionVideo?.blob]);
+  }, [analysisStatus, isRecording, sessionVideo?.createdAt, sessionVideo?.blob]);
 
   useEffect(() => {
-    if (!sessionVideo) {
-      setAutoAnalyzedSessionId(null);
-    }
-  }, [sessionVideo?.createdAt, sessionVideo]);
+    if (sessionVideo) return;
+    setAnalysisStatus("idle");
+    setAnalysisSource(null);
+    setAnalysisQueuedSessionId(null);
+  }, [sessionVideo]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const freshRequested = new URLSearchParams(window.location.search).get("fresh") === "1";
+    if (!freshRequested) return;
+
+    clearCurrentSession();
+    clearSessionVideo();
+    clearSessionAnalysis();
+    setInputMode(null);
+    setWaveformData(null);
+    setWaveformLoading(false);
+    setWaveformError(null);
+    setLiveWaveform({ envelope: [], energy: [] });
+    setAnalysisResults(null);
+    setAgentStates(createInitialAgentState());
+    setAgentOutputs({});
+    setAnalysisQueuedSessionId(null);
+    setAnalysisStatus("idle");
+    setAnalysisSource(null);
+    setVideoCurrentTime(0);
+    setVideoDuration(0);
+    setErrorMessage(null);
+    setCoachMessage(null);
+    setStatusMessage("Choose Record or Upload to begin.");
+    router.replace("/record");
+  }, [clearSessionAnalysis, clearSessionVideo, router]);
 
   useEffect(() => {
     const sessionId = sessionVideo?.createdAt;
     if (!sessionId) return;
-    if (isRecording || analysisRunning || waveformLoading) return;
+    if (analysisQueuedSessionId !== sessionId) return;
+    if (analysisStatus !== "ready") return;
+    if (isRecording || waveformLoading) return;
     const uploadNeedsDecodedWaveform = sessionVideo?.source === "upload";
     if (uploadNeedsDecodedWaveform && (waveformError || !waveformData)) return;
     if (!waveformData && !waveformError) return;
-    if ((!identityReady && !demoMode) || autoAnalyzedSessionId === sessionId) return;
+    if (!identityReady && !demoMode) return;
 
-    setAutoAnalyzedSessionId(sessionId);
     setStatusMessage("Analyzing...");
     void runAnalysis();
   }, [
-    analysisRunning,
-    autoAnalyzedSessionId,
+    analysisStatus,
+    analysisQueuedSessionId,
     demoMode,
     identityReady,
     isRecording,
@@ -1625,7 +1716,30 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
   ]);
 
   useEffect(() => {
-    if (!analysisRunning) return;
+    if (analysisStatus !== "running") return;
+
+    if (agentProgress.errorCount > 0 || !!errorMessage) {
+      setAnalysisStatus("error");
+      setStatusMessage("Analysis failed. Capture another sample to retry.");
+      return;
+    }
+
+    const allAgentsDone = agentProgress.total > 0 && agentProgress.doneCount === agentProgress.total;
+    if (allAgentsDone && finalResultsReady) {
+      setAnalysisStatus("complete");
+      setStatusMessage("Analysis complete. Open Results to review your breathing snapshot.");
+    }
+  }, [
+    agentProgress.doneCount,
+    agentProgress.errorCount,
+    agentProgress.total,
+    analysisStatus,
+    errorMessage,
+    finalResultsReady
+  ]);
+
+  useEffect(() => {
+    if (!isAnalysisRunning) return;
     setAgentsExpanded(true);
 
     if (agentsSectionRef.current) {
@@ -1634,14 +1748,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
         block: "start"
       });
     }
-  }, [analysisRunning, reducedMotion]);
-
-  useEffect(() => {
-    if (wasAnalyzingRef.current && !analysisRunning && (agentProgress.done > 0 || agentProgress.errors > 0)) {
-      setAgentsExpanded(false);
-    }
-    wasAnalyzingRef.current = analysisRunning;
-  }, [agentProgress.done, agentProgress.errors, analysisRunning]);
+  }, [isAnalysisRunning, reducedMotion]);
 
   useEffect(() => {
     setPermissionState(canRecordInBrowser() ? "idle" : "unsupported");
@@ -1716,7 +1823,18 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                 <Pill className={styles.statusChip}>{permissionLabel}</Pill>
                 <Pill className={styles.statusChip}>{sourceLabel}</Pill>
                 <Pill className={styles.statusChip}>Voice Coach: {voiceCoachEnabled ? "On" : "Off"}</Pill>
-                <Pill className={styles.statusChip}>Backboard: {analysisRunning ? "Running" : "Ready"}</Pill>
+                <Pill className={styles.statusChip}>
+                  Backboard:{" "}
+                  {analysisStatus === "running"
+                    ? "Running"
+                    : analysisStatus === "complete"
+                      ? "Complete"
+                      : analysisStatus === "error"
+                        ? "Error"
+                        : analysisStatus === "ready"
+                          ? "Ready"
+                          : "Idle"}
+                </Pill>
                 <Pill className={styles.statusChip}>Device: {deviceId ? `${deviceId.slice(0, 8)}...` : "Loading"}</Pill>
                 {demoMode ? <Pill className={styles.statusChip}>Demo Mode: ON</Pill> : null}
               </div>
@@ -1724,7 +1842,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
               <HintText className={styles.statusText}>{statusMessage}</HintText>
               {errorMessage ? <p className={styles.errorText}>{errorMessage}</p> : null}
               {coachMessage ? <p className={styles.warningText}>{coachMessage}</p> : null}
-              {analysisMessage ? <p className={styles.successText}>{analysisMessage}</p> : null}
+              {pipelineCompleteMessage ? <p className={styles.successText}>{pipelineCompleteMessage}</p> : null}
 
               {analysisResults ? (
                 <div className={styles.backboardSummary}>
@@ -1763,10 +1881,10 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                 </SectionTitle>
                 <div className={styles.previewHeaderRight}>
                   <AnimatePresence>
-                    {analysisRunning ? (
+                    {isAnalysisRunning ? (
                       <motion.div variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
                         <Pill className={styles.analyzingPill}>
-                          Analyzing... {progressDoneCount}/{PROGRESS_STEPS.length}
+                          Analyzing... {agentProgress.doneCount}/{agentProgress.total}
                         </Pill>
                       </motion.div>
                     ) : null}
@@ -1855,18 +1973,14 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                           <Pill
                             className={cx(
                               styles.agentsProgressPill,
-                              analysisRunning
+                              isAnalysisRunning
                                 ? styles.agentsProgressRunning
-                                : agentProgress.done === agentProgress.total && agentProgress.total > 0
+                                : analysisStatus === "complete"
                                   ? styles.agentsProgressDone
                                   : undefined
                             )}
                           >
-                            {analysisRunning
-                              ? `Analyzing... ${agentProgress.done}/${agentProgress.total}`
-                              : agentProgress.done === agentProgress.total && agentProgress.total > 0
-                                ? "Complete"
-                                : `Ready ${agentProgress.done}/${agentProgress.total}`}
+                            {progressLabel}
                           </Pill>
                         </div>
                         <button
@@ -1939,8 +2053,8 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                       </AnimatePresence>
 
                       <div className={styles.agentFooter}>
-                        <Pill className={styles.statusChip}>Running: {agentProgress.running}</Pill>
-                        <Pill className={styles.statusChip}>Errors: {agentProgress.errors}</Pill>
+                        <Pill className={styles.statusChip}>Running: {agentProgress.runningCount}</Pill>
+                        <Pill className={styles.statusChip}>Errors: {agentProgress.errorCount}</Pill>
                         <Pill className={styles.statusChip}>Thread: {threadId ? "linked" : "new"}</Pill>
                       </div>
                     </motion.section>
@@ -1951,12 +2065,18 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                       >
                         <div className={styles.analysisProgressHeader}>
                           <SectionTitle as="h3" className={styles.analysisProgressTitle}>
-                            {analysisComplete ? "Analysis complete" : "Analysis Progress"}
+                            {analysisStatus === "complete"
+                              ? "Analysis complete"
+                              : analysisStatus === "error"
+                                ? "Analysis error"
+                                : analysisStatus === "ready"
+                                  ? "Analysis ready"
+                                  : "Analysis Progress"}
                           </SectionTitle>
                           <Pill
                             className={cx(
                               styles.analysisProgressStatus,
-                              analysisComplete && styles.analysisProgressStatusDone
+                              analysisStatus === "complete" && styles.analysisProgressStatusDone
                             )}
                           >
                             {progressLabel}
@@ -1965,63 +2085,75 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
 
                         <div className={styles.analysisProgressBarBlock}>
                           <p className={styles.analysisProgressLabel}>{progressLabel}</p>
-                          <div className={styles.analysisProgressTrack} aria-hidden>
-                            <motion.span
-                              className={styles.analysisProgressFill}
-                              animate={{ width: `${Math.round(progressFraction * 100)}%` }}
-                              transition={
-                                reducedMotion
-                                  ? { duration: 0.12 }
-                                  : {
-                                      duration: 0.46,
-                                      ease: [0.22, 1, 0.36, 1]
-                                    }
-                              }
-                            />
-                          </div>
-                        </div>
-
-                        <motion.div className={styles.analysisTimeline} variants={staggerChildren}>
-                          {timelineSteps.map((step) => (
-                            <motion.div
-                              key={step.key}
-                              variants={fadeUp}
-                              className={cx(
-                                styles.analysisStep,
-                                step.status === "done" && styles.analysisStepDone,
-                                step.status === "running" && styles.analysisStepRunning
-                              )}
-                            >
-                              <span className={styles.analysisStepIconWrap}>
-                                <ProgressStepIcon stepKey={step.key} />
-                              </span>
-                              <span className={styles.analysisStepName}>{step.label}</span>
-                            </motion.div>
-                          ))}
-                        </motion.div>
-
-                        <div className={styles.livePillarsRow}>
-                          {livePillarCards.map((pillar) => (
-                            <div key={pillar.key} className={styles.livePillarCard}>
-                              <span className={styles.livePillarLabel}>{pillar.label}</span>
-                              <AnimatePresence mode="wait" initial={false}>
-                                <motion.span
-                                  key={`${pillar.key}-${pillar.value}`}
-                                  className={styles.livePillarValue}
-                                  variants={fadeUp}
-                                  initial="hidden"
-                                  animate="visible"
-                                  exit="hidden"
-                                >
-                                  {pillar.value}
-                                </motion.span>
-                              </AnimatePresence>
+                          {analysisStatus === "running" || analysisStatus === "complete" ? (
+                            <div className={styles.analysisProgressTrack} aria-hidden>
+                              <motion.span
+                                className={styles.analysisProgressFill}
+                                animate={{ width: `${Math.round(progressFraction * 100)}%` }}
+                                transition={
+                                  analysisStatus === "running"
+                                    ? reducedMotion
+                                      ? { duration: 0.12 }
+                                      : {
+                                          duration: 0.46,
+                                          ease: [0.22, 1, 0.36, 1]
+                                        }
+                                    : { duration: 0.12 }
+                                }
+                              />
                             </div>
-                          ))}
+                          ) : null}
                         </div>
+
+                        {analysisStatus === "running" || analysisStatus === "complete" ? (
+                          <>
+                            <motion.div className={styles.analysisTimeline} variants={staggerChildren}>
+                              {timelineSteps.map((step) => (
+                                <motion.div
+                                  key={step.key}
+                                  variants={fadeUp}
+                                  className={cx(
+                                    styles.analysisStep,
+                                    step.status === "done" && styles.analysisStepDone,
+                                    step.status === "running" && styles.analysisStepRunning
+                                  )}
+                                >
+                                  <span className={styles.analysisStepIconWrap}>
+                                    <ProgressStepIcon stepKey={step.key} />
+                                  </span>
+                                  <span className={styles.analysisStepName}>{step.label}</span>
+                                </motion.div>
+                              ))}
+                            </motion.div>
+
+                            <div className={styles.livePillarsRow}>
+                              {livePillarCards.map((pillar) => (
+                                <div key={pillar.key} className={styles.livePillarCard}>
+                                  <span className={styles.livePillarLabel}>{pillar.label}</span>
+                                  <AnimatePresence mode="wait" initial={false}>
+                                    <motion.span
+                                      key={`${pillar.key}-${pillar.value}`}
+                                      className={styles.livePillarValue}
+                                      variants={fadeUp}
+                                      initial="hidden"
+                                      animate="visible"
+                                      exit="hidden"
+                                    >
+                                      {pillar.value}
+                                    </motion.span>
+                                  </AnimatePresence>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        ) : analysisStatus === "error" ? (
+                          <HintText className={styles.previewHint}>Analysis failed. Capture again to retry.</HintText>
+                        ) : analysisStatus === "ready" ? (
+                          <HintText className={styles.previewHint}>Ready. Analysis starts automatically.</HintText>
+                        ) : null}
 
                         <AnimatePresence>
-                          {analysisComplete ? (
+                          {analysisStatus === "complete" ? (
                             <motion.div
                               className={styles.analysisResultsCta}
                               variants={fadeUp}
@@ -2059,7 +2191,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                     type="button"
                     className={cx(styles.controlButton, styles.stopPrimary)}
                     onClick={() => stopRecording("cancel")}
-                    disabled={analysisRunning}
+                    disabled={isAnalysisRunning}
                   >
                     Stop
                   </GlowButton>
@@ -2070,9 +2202,9 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
                     type="button"
                     className={styles.controlButton}
                     onClick={startRecording}
-                    disabled={analysisRunning}
+                    disabled={isAnalysisRunning}
                   >
-                    {analysisRunning ? "Busy" : "Start"}
+                    {isAnalysisRunning ? "Busy" : "Start"}
                   </GlowButton>
                 </motion.div>
               )}
@@ -2084,9 +2216,9 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
               type="button"
               className={styles.secondaryButton}
               onClick={triggerUploadPicker}
-              disabled={isRecording || analysisRunning}
+              disabled={isRecording || isAnalysisRunning}
             >
-              {analysisRunning ? "Busy" : "Upload"}
+              {isAnalysisRunning ? "Busy" : "Upload"}
             </button>
           </motion.div>
 
@@ -2102,7 +2234,7 @@ export default function RecordPageClient({ mode }: RecordPageClientProps) {
           </motion.div>
 
           <AnimatePresence>
-            {analysisRunning ? (
+            {isAnalysisRunning ? (
               <motion.div key="analyzing-indicator" variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
                 <Pill className={styles.analyzingControl}>Analyzing...</Pill>
               </motion.div>

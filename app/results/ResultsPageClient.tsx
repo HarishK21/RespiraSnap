@@ -9,6 +9,7 @@ import { useDemoScript } from "@/hooks/useDemoScript";
 import { useReducedMotionPref } from "@/hooks/useReducedMotionPref";
 import { useSessionAnalysis } from "@/hooks/useSessionAnalysis";
 import { useSessionVideo } from "@/hooks/useSessionVideo";
+import { clearCurrentSession } from "@/lib/currentSession";
 import type { SessionPillars } from "@/lib/analysisBundle";
 import { AnimatePresence, motion } from "framer-motion";
 import { useRouter } from "next/navigation";
@@ -129,8 +130,8 @@ export default function ResultsPageClient() {
   const { reducedMotion, hasOverride, toggleReducedMotion } = useReducedMotionPref();
   const { demoMode, toggleDemoMode } = useDemoMode();
   const demoScript = useDemoScript();
-  const { sessionVideo } = useSessionVideo();
-  const { sessionAnalysis, analysisHistory } = useSessionAnalysis();
+  const { sessionVideo, clearSessionVideo } = useSessionVideo();
+  const { sessionAnalysis, analysisHistory, clearSessionAnalysis } = useSessionAnalysis();
 
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
@@ -299,6 +300,14 @@ export default function ResultsPageClient() {
 
     setReadAloudBusy(false);
   }, []);
+
+  const handleRecordAgain = useCallback(() => {
+    stopReadAloud();
+    clearSessionVideo();
+    clearSessionAnalysis();
+    clearCurrentSession();
+    router.push("/record?fresh=1");
+  }, [clearSessionAnalysis, clearSessionVideo, router, stopReadAloud]);
 
   const seekVideo = useCallback(
     (nextTime: number, reason: "scrub" | "marker" | "key", label?: string) => {
@@ -615,7 +624,7 @@ export default function ResultsPageClient() {
                   Jump To Key Moment
                 </button>
 
-                <button type="button" className={styles.ghostButton} onClick={() => router.push("/record")}>
+                <button type="button" className={styles.ghostButton} onClick={handleRecordAgain}>
                   New Snapshot
                 </button>
               </div>
@@ -850,7 +859,7 @@ export default function ResultsPageClient() {
           </motion.div>
 
           <motion.div variants={fadeUp} {...(reducedMotion ? {} : hoverGlow)} className={styles.footerActions}>
-            <GlowButton type="button" onClick={() => router.push("/record")}>
+            <GlowButton type="button" onClick={handleRecordAgain}>
               Record Again
             </GlowButton>
             <button type="button" className={styles.ghostButton} onClick={() => router.push("/history")}>
