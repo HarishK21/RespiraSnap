@@ -2,6 +2,8 @@
 
 *Built for Hack Canada 2026 🇨🇦*
 
+Watch the demo here: https://youtu.be/8gZiano6k90
+
 RespiraSnap is an AI-powered respiratory analysis tool that provides immediate, actionable insights into your breathing patterns. By capturing a single 15-second breathing snapshot, the platform analyzes audio waveforms to detect inhales, holds, exhales, and irregularities, forming a comprehensive view of your current respiratory state.
 
 In today's fast-paced world, breathing mechanics are often overlooked, yet they are a fundamental indicator of stress, focus, and overall nervous system regulation. RespiraSnap bridges the gap between subjective feeling and objective data, turning the microphone you already have into a powerful biosensor.
