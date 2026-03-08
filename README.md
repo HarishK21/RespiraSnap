@@ -21,6 +21,9 @@ In today's fast-paced world, breathing mechanics are often overlooked, yet they 
 - **Clinician-Style Summaries:** Translates complex wave data into clear, non-diagnostic insights and actionable lifestyle coaching tips.
 - **Historical Tracking:** Visualizes and compares core breathing pillars—Rhythm, Exhale Ratio, Interruptions, and Holds—across past sessions to track progress or regression.
 
+<img width="1369" height="851" alt="image" src="https://github.com/user-attachments/assets/748f5a12-faaa-48f6-8162-e2f8ba789bf8" />
+
+
 ---
 
 ## Powered By Multi-Agent Orchestration & Voice
@@ -38,8 +41,13 @@ Instead of relying on a single monolithic prompt, we use Backboard to divide the
 - **Coaching & Follow-Up Agents:** Generates personalized micro-interventions and creates a prompt for the user's next session.
 These agents run concurrently and stream their intermediate states (Queued → Running → Done) via Server-Sent Events (SSE) directly to the frontend, giving users a live, transparent view of the AI pipeline at work.
 
+<img width="1371" height="849" alt="image" src="https://github.com/user-attachments/assets/ccb2994d-32aa-46d2-9bc5-d88c0775599b" />
+<img width="1364" height="851" alt="image" src="https://github.com/user-attachments/assets/f42f33c6-aaff-4a1e-bc8a-9409b8eb84be" />
+
 **2. Conversational Memory (RAG)**
 A key feature of RespiraSnap is its ability to understand a user's *baseline*. We use Backboard's native Memory API to silently store past snapshot data (energy variance, rhythm stability, scores) as conversational memory attached to the user's device ID. When the *Baseline & Trend Agent* runs, it automatically retrieves this historical context to provide accurate, personalized trend analysis without us needing to build a complex RAG pipeline from scratch.
+
+<img width="1365" height="850" alt="image" src="https://github.com/user-attachments/assets/9df70e2c-e7e7-4ddd-817f-5f48b5e387c5" />
 
 **3. Thread & State Management**
 Every analysis session belongs to an ongoing Backboard Thread. This ensures that the Follow-up and Coaching agents have immediate, conversational context of what the Segmentation and Baseline agents just concluded, maintaining continuity across the pipeline.
